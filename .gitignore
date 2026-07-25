@@ -1,0 +1,11 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+auth_sessions/
+whatsapp_auth_session/
+test_whatsapp_session/

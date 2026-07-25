@@ -1,0 +1,6 @@
+{
+  "name": "Device Link Simulator",
+  "description": "An interactive simulator showing how QR code device linking (like WhatsApp Web) works, featuring split-screen mobile and companion views with real-time pairing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

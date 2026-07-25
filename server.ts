@@ -1,0 +1,1797 @@
+import express from "express";
+import path from "path";
+import fs from "fs";
+import pino from "pino";
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, WASocket, Browsers, fetchLatestBaileysVersion } from "@whiskeysockets/baileys";
+import { createServer as createViteServer } from "vite";
+import { TelegramClient, Api } from "telegram";
+import { StringSession } from "telegram/sessions/index.js";
+import { NewMessage } from "telegram/events/index.js";
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json());
+
+interface WAState {
+  status: "disconnected" | "connecting" | "pairing-code-ready" | "linking" | "connected" | "error";
+  phone: string;
+  pairingCode: string;
+  profile: {
+    name: string;
+    phone: string;
+  } | null;
+  error: string | null;
+}
+
+// Map key = phone (stripped digits), value = Active Baileys session
+interface ConnectedSession {
+  phoneNumber: string;
+  sock: any;
+  status: "disconnected" | "connecting" | "pairing-code-ready" | "linking" | "connected" | "error";
+  pairingCode: string;
+  profile: {
+    name: string;
+    phone: string;
+  } | null;
+  error: string | null;
+}
+
+const activeSessions = new Map<string, ConnectedSession>();
+let currentActivePhone: string | null = null;
+
+// Global session variables maintained for backwards compatibility with the existing simple React frontend
+let sessionState: WAState = {
+  status: "disconnected",
+  phone: "",
+  pairingCode: "",
+  profile: null,
+  error: null,
+};
+
+let activeSock: any = null;
+
+// --- LOCAL DATABASE SCHEMA ---
+interface SavedAccount {
+  phone: string;
+  name: string;
+  linkedAt: string;
+  addedByChatId?: number;
+  addedByName?: string;
+}
+
+const DB_FILE = path.join(process.cwd(), "db_accounts.json");
+
+// --- TELEGRAM MODULES AND DATA STORES ---
+const TG_DB_FILE = path.join(process.cwd(), "db_telegram_accounts.json");
+const TG_API_ID = Number(process.env.TELEGRAM_API_ID || "2040"); 
+const TG_API_HASH = process.env.TELEGRAM_API_HASH || "b18441a1fff1153b5436ca404d41255e";
+
+interface SavedTgAccount {
+  phone: string;
+  name: string;
+  username: string;
+  session: string;
+  linkedAt: string;
+  status: "connected" | "disconnected";
+}
+
+const activeTgSessions = new Map<string, { client: any; status: string }>();
+const pendingTgLogins = new Map<string, {
+  client: any;
+  phoneNumber: string;
+  phoneCodeHash: string;
+  expiresAt: number;
+}>();
+
+function getSavedTgAccountsList(): SavedTgAccount[] {
+  if (!fs.existsSync(TG_DB_FILE)) {
+    return [];
+  }
+  try {
+    const data = fs.readFileSync(TG_DB_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveTgAccountToDb(phone: string, name: string, username: string, session: string) {
+  const accounts = getSavedTgAccountsList();
+  const existingIdx = accounts.findIndex((acc) => acc.phone === phone);
+
+  if (existingIdx > -1) {
+    accounts[existingIdx].name = name;
+    accounts[existingIdx].username = username;
+    accounts[existingIdx].session = session;
+    accounts[existingIdx].linkedAt = new Date().toISOString();
+    accounts[existingIdx].status = "connected";
+  } else {
+    accounts.push({
+      phone,
+      name,
+      username,
+      session,
+      linkedAt: new Date().toISOString(),
+      status: "connected"
+    });
+  }
+
+  try {
+    fs.writeFileSync(TG_DB_FILE, JSON.stringify(accounts, null, 2), "utf-8");
+    console.log(`[DB TG] Saved Telegram account +${phone} successfully.`);
+  } catch (e) {
+    console.error("[DB TG] Failed to save TG account:", e);
+  }
+}
+
+function deleteTgAccountFromDb(phone: string): boolean {
+  const session = activeTgSessions.get(phone);
+  if (session && session.client) {
+    try {
+      session.client.disconnect();
+    } catch {}
+  }
+  activeTgSessions.delete(phone);
+
+  const accounts = getSavedTgAccountsList();
+  const filtered = accounts.filter((acc) => acc.phone !== phone);
+  const existed = accounts.length !== filtered.length;
+
+  try {
+    fs.writeFileSync(TG_DB_FILE, JSON.stringify(filtered, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[DB TG] Failed to delete TG account:", e);
+  }
+
+  return existed;
+}
+
+function normalizePhone(raw: string): string {
+  // 1. Remove all non-digit characters
+  let clean = raw.replace(/\D/g, "");
+  if (!clean) return "";
+
+  // 2. Normalize Bangladeshi mobile numbers starting with local 0-prefix or 1-prefix
+  if (clean.startsWith("0") && clean.length === 11) {
+    clean = "88" + clean;
+  } else if (clean.startsWith("1") && clean.length === 10) {
+    clean = "880" + clean;
+  }
+
+  // 3. Strip extra leading zero from national part for known international country codes
+  // e.g. +44 07911 123456 -> 4407911123456 -> 447911123456
+  const commonCodes = ["880", "91", "92", "977", "94", "960", "93", "966", "971", "1", "44", "968", "974", "965", "964", "962", "961", "967", "60", "65", "81", "82", "62", "63", "66", "84", "95", "855", "52", "55", "54", "57", "51", "56", "39", "34", "33", "49", "90", "31", "32", "41", "46", "351", "30", "43", "48", "7", "61", "64", "27", "20", "234", "254", "212"];
+  commonCodes.sort((a, b) => b.length - a.length);
+  
+  for (const cc of commonCodes) {
+    if (clean.startsWith(cc)) {
+      let national = clean.substring(cc.length);
+      if (national.startsWith("0")) {
+        while (national.startsWith("0")) {
+          national = national.substring(1);
+        }
+        clean = `${cc}${national}`;
+      }
+      break;
+    }
+  }
+
+  return clean;
+}
+
+function startTgUserbotListeners(client: TelegramClient, phone: string) {
+  try {
+    client.addEventHandler(async (event: any) => {
+      const message = event.message;
+      if (!message || !message.message) return;
+      
+      const senderId = message.senderId ? message.senderId.toString() : "unknown";
+      const text = message.message;
+      console.log(`[Telegram Userbot +${phone}] Received message from ${senderId}: "${text}"`);
+      
+      const cleanText = text.toLowerCase().trim();
+      if (cleanText === "ping") {
+        await client.sendMessage(message.chatId, { message: "Pong! 🤖 (Checked & Verified by Tele-Gateway Client)" });
+      } else if (cleanText === ".help" || cleanText === "help") {
+        await client.sendMessage(message.chatId, { message: "Hello! This account is managed by Tele-Gateway Bot Helper. Commands: ping, info" });
+      } else if (cleanText === "info") {
+        await client.sendMessage(message.chatId, { message: "Connected successfully. Telegram Multi-Account Controller is operational. 🌐" });
+      }
+    }, new NewMessage({}));
+    console.log(`[Telegram Userbot +${phone}] Message handlers registered successfully.`);
+  } catch (err) {
+    console.error(`[Telegram Userbot +${phone}] Failed to register event handlers:`, err);
+  }
+}
+
+async function getActiveTgClient(phone: string): Promise<TelegramClient> {
+  const existing = activeTgSessions.get(phone);
+  if (existing && existing.client && existing.client.connected) {
+    return existing.client;
+  }
+
+  const accounts = getSavedTgAccountsList();
+  const acc = accounts.find(a => a.phone === phone);
+  if (!acc || !acc.session) {
+    throw new Error(`Telegram session not found for phone +${phone}`);
+  }
+
+  console.log(`[Telegram Client] Connecting client for +${phone}...`);
+  const client = new TelegramClient(
+    new StringSession(acc.session),
+    TG_API_ID,
+    TG_API_HASH,
+    { connectionRetries: 3 }
+  );
+  await client.connect();
+  
+  activeTgSessions.set(phone, { client, status: "connected" });
+  return client;
+}
+
+async function initAllTgSessions() {
+  const accounts = getSavedTgAccountsList();
+  console.log(`[Telegram Service] Restoring ${accounts.length} saved Telegram sessions...`);
+  
+  for (const acc of accounts) {
+    if (acc.session && acc.status === "connected") {
+      try {
+        console.log(`[Telegram Service] Restoring session for +${acc.phone}...`);
+        const client = new TelegramClient(
+          new StringSession(acc.session),
+          TG_API_ID,
+          TG_API_HASH,
+          { connectionRetries: 1 }
+        );
+        await client.connect();
+        activeTgSessions.set(acc.phone, { client, status: "connected" });
+        startTgUserbotListeners(client, acc.phone);
+        console.log(`[Telegram Service] Restored session +${acc.phone} successfully.`);
+      } catch (err) {
+        console.error(`[Telegram Service] Failed to restore session for +${acc.phone}:`, err);
+      }
+    }
+  }
+}
+
+// Store temporary mapping of phone numbers being linked via Telegram to their owner Telegram Chat IDs
+const linkingOwners = new Map<string, { chatId: number; name: string }>();
+
+function getSavedAccountsList(): SavedAccount[] {
+  if (!fs.existsSync(DB_FILE)) {
+    return [];
+  }
+  try {
+    const data = fs.readFileSync(DB_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch (e) {
+    console.error("[DB] Error reading db_accounts.json, using empty array:", e);
+    return [];
+  }
+}
+
+function saveAccountToDb(phone: string, name: string, addedByChatId?: number, addedByName?: string) {
+  const accounts = getSavedAccountsList();
+  const existingIdx = accounts.findIndex(acc => acc.phone === phone);
+  const cleanName = name || "WhatsApp User";
+
+  if (existingIdx > -1) {
+    accounts[existingIdx].name = cleanName;
+    accounts[existingIdx].linkedAt = new Date().toISOString();
+    if (addedByChatId !== undefined) {
+      accounts[existingIdx].addedByChatId = addedByChatId;
+    }
+    if (addedByName !== undefined) {
+      accounts[existingIdx].addedByName = addedByName;
+    }
+  } else {
+    accounts.push({
+      phone,
+      name: cleanName,
+      linkedAt: new Date().toISOString(),
+      addedByChatId,
+      addedByName
+    });
+  }
+
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(accounts, null, 2), "utf-8");
+    console.log(`[DB] Account +${phone} saved successfully to local database (AddedBy: ${addedByName || "System"}).`);
+  } catch (e) {
+    console.error("[DB] Failed to save account to db_accounts.json:", e);
+  }
+}
+
+function deleteAccountFromDb(phone: string): boolean {
+  console.log(`[DB] Request to delete account +${phone}`);
+  
+  // Cleanly terminate active socket connection
+  const session = activeSessions.get(phone);
+  if (session) {
+    if (session.sock) {
+      try {
+        session.sock.end(undefined);
+      } catch (e) {}
+    }
+    activeSessions.delete(phone);
+  }
+
+  // Clear credentials folders safely
+  clearSessionDirectoryForPhone(phone);
+
+  const accounts = getSavedAccountsList();
+  const filtered = accounts.filter(acc => acc.phone !== phone);
+  const existed = accounts.length !== filtered.length;
+
+  if (existed) {
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(filtered, null, 2), "utf-8");
+      console.log(`[DB] Account +${phone} cleared from the database file.`);
+    } catch (e) {
+      console.error("[DB] Failed to write database file during deletion:", e);
+    }
+  }
+
+  // Fallback active session pointer
+  if (currentActivePhone === phone) {
+    currentActivePhone = filtered.length > 0 ? filtered[0].phone : null;
+  }
+  updateGlobalSessionStateToSelectedActive();
+
+  return existed;
+}
+
+// Sync global variables so Web UI's /api/status endpoint behaves correctly
+function updateGlobalSessionStateToSelectedActive() {
+  if (!currentActivePhone) {
+    sessionState = {
+      status: "disconnected",
+      phone: "",
+      pairingCode: "",
+      profile: null,
+      error: null,
+    };
+    activeSock = null;
+    return;
+  }
+
+  const session = activeSessions.get(currentActivePhone);
+  if (session) {
+    sessionState = {
+      status: session.status,
+      phone: session.phoneNumber,
+      pairingCode: session.pairingCode,
+      profile: session.profile,
+      error: session.error,
+    };
+    activeSock = session.sock;
+  } else {
+    sessionState = {
+      status: "disconnected",
+      phone: currentActivePhone,
+      pairingCode: "",
+      profile: null,
+      error: null,
+    };
+    activeSock = null;
+  }
+}
+
+// Helper to remove individual phone sessions directory
+function clearSessionDirectoryForPhone(phone: string) {
+  const dir = path.join(process.cwd(), `whatsapp_auth_session_${phone}`);
+  if (fs.existsSync(dir)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log(`Cleared session folder: whatsapp_auth_session_${phone}`);
+    } catch (e) {
+      console.error(`Error deleting credentials directory for +${phone}:`, e);
+    }
+  }
+}
+
+// Function to initialize individual WhatsApp sockets per phone number
+async function initWhatsApp(phoneNumber: string, isReconnect = false) {
+  try {
+    console.log(`[WhatsApp init] Phone: ${phoneNumber}, Reconnect: ${isReconnect}`);
+    
+    // Safety check: close any active connection running on this number
+    const existing = activeSessions.get(phoneNumber);
+    if (existing && existing.sock) {
+      try {
+        existing.sock.end(undefined);
+      } catch (e) {}
+    }
+
+    if (!isReconnect) {
+      clearSessionDirectoryForPhone(phoneNumber);
+      activeSessions.set(phoneNumber, {
+        phoneNumber,
+        sock: null,
+        status: "connecting",
+        pairingCode: "",
+        profile: null,
+        error: null
+      });
+    } else {
+      const oldData = activeSessions.get(phoneNumber);
+      activeSessions.set(phoneNumber, {
+        phoneNumber,
+        sock: null,
+        status: "connecting",
+        pairingCode: oldData?.pairingCode || "",
+        profile: oldData?.profile || null,
+        error: null
+      });
+    }
+
+    updateGlobalSessionStateToSelectedActive();
+
+    // Store in unique auth folders per account
+    const authDir = `whatsapp_auth_session_${phoneNumber}`;
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+
+    // Fetch modern safe WhatsApp web browser version parameters
+    let version: any = [2, 3000, 1035194821];
+    try {
+      const fetched = await fetchLatestBaileysVersion();
+      if (fetched && fetched.version) {
+        version = fetched.version;
+      }
+    } catch (vErr) {
+      console.warn("Dynamic version fetch failed. Using default safest fallback", vErr);
+    }
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      logger: pino({ level: "silent" }) as any,
+      browser: ["Ubuntu", "Chrome", "20.0.04"]
+    });
+
+    // Update session instance socket pointer
+    const sessRef = activeSessions.get(phoneNumber);
+    if (sessRef) {
+      sessRef.sock = sock;
+    }
+
+    // Keep global activeSock pointer synced if it matches active selected
+    if (currentActivePhone === phoneNumber) {
+      activeSock = sock;
+    }
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect } = update;
+      console.log(`[Connection Update] +${phoneNumber} =>`, connection);
+
+      const sess = activeSessions.get(phoneNumber);
+      if (!sess) return;
+
+      if (connection === "connecting") {
+        if (sess.status !== "pairing-code-ready" && sess.status !== "connected") {
+          sess.status = "connecting";
+        }
+      } else if (connection === "open") {
+        sess.status = "connected";
+        const cleanJid = sock.user?.id.split("@")[0] || "";
+        sess.profile = {
+          name: sock.user?.name || "WhatsApp User",
+          phone: cleanJid.split(":")[0],
+        };
+        console.log(`[WhatsApp Connected] +${phoneNumber} is now logged in as:`, sess.profile.name);
+
+        // Persistent save in db_accounts.json local database with Telegram owner attribution if available
+        const owner = linkingOwners.get(phoneNumber);
+        saveAccountToDb(
+          phoneNumber, 
+          sock.user?.name || "", 
+          owner?.chatId, 
+          owner?.name
+        );
+
+        // Notify the Telegram user who linked this account
+        if (owner?.chatId) {
+          sendTelegramMessage(
+            owner.chatId,
+            `🎉 *হোয়াটসঅ্যাপ লিঙ্ক সম্পন্ন!* \n\nআপনার হোয়াটসঅ্যাপ অ্যাকাউন্ট (+${phoneNumber}) সফলভাবে যুক্ত করা হয়েছে এবং আপনার টেলিগ্রাম আইডি ও অ্যাকাউন্টের সাথে লিঙ্ক করা হয়েছে।`
+          ).catch(e => console.error("[Telegram notify] error:", e));
+        }
+
+        // Keep global variables in sync
+        updateGlobalSessionStateToSelectedActive();
+
+        // Send a self validation text message
+        try {
+          const userJid = sock.user?.id;
+          if (userJid) {
+            await sock.sendMessage(userJid, {
+              text: `🎉 *WhatsApp Verification Account Connected* \n\nআপনার ডিভাইসটি লিঙ্কফাইতে সফলভাবে যুক্ত হয়েছে এবং লোকাল ডাটাবেজে সেভ হয়েছে।`,
+            });
+          }
+        } catch (msgErr) {
+          console.error(`Failed to send self greeting message for +${phoneNumber}:`, msgErr);
+        }
+      } else if (connection === "close") {
+        const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+        const loggedOut = statusCode === DisconnectReason.loggedOut;
+
+        console.log(`[Connection Closed] +${phoneNumber} StatusCode: ${statusCode}, LoggedOut: ${loggedOut}`);
+
+        if (loggedOut) {
+          sess.status = "disconnected";
+          sess.profile = null;
+          sess.sock = null;
+          deleteAccountFromDb(phoneNumber);
+          updateGlobalSessionStateToSelectedActive();
+        } else {
+          sess.status = "connecting";
+          updateGlobalSessionStateToSelectedActive();
+
+          // Smooth exponential socket reconnect retry
+          console.log(`Scheduling auto silent socket recovery for +${phoneNumber} in 3 seconds...`);
+          setTimeout(() => {
+            const currentVal = activeSessions.get(phoneNumber);
+            if (currentVal && currentVal.status !== "disconnected") {
+              initWhatsApp(phoneNumber, true);
+            }
+          }, 3000);
+        }
+      }
+    });
+
+    // Request the multi-factor validation pairing code after brief start delay
+    setTimeout(async () => {
+      try {
+        const sess = activeSessions.get(phoneNumber);
+        if (!sess) return;
+
+        if (!sock.authState.creds.registered) {
+          if (!isReconnect) {
+            console.log(`[Baileys Status] Launching Pairing Code request for phone: ${phoneNumber}`);
+            const rawCode = await sock.requestPairingCode(phoneNumber);
+            
+            let formattedCode = rawCode;
+            if (rawCode && rawCode.length === 8) {
+              formattedCode = `${rawCode.substring(0, 4)}-${rawCode.substring(4)}`;
+            }
+            
+            sess.status = "pairing-code-ready";
+            sess.pairingCode = formattedCode;
+            updateGlobalSessionStateToSelectedActive();
+            console.log(`[Baileys Code] Generated pairing code for +${phoneNumber} is: ${formattedCode}`);
+          } else {
+            console.log(`[Baileys Sync] Reconnecting active key sessions for +${phoneNumber}. Ready.`);
+          }
+        } else {
+          if (sess.status !== "connected") {
+            sess.status = "connecting";
+            updateGlobalSessionStateToSelectedActive();
+          }
+        }
+      } catch (err: any) {
+        console.error(`Pairing code handshake failed for +${phoneNumber}:`, err);
+        const sess = activeSessions.get(phoneNumber);
+        if (sess) {
+          sess.status = "error";
+          sess.error = err.message || "Failed to handshake with standard WhatsApp system.";
+          updateGlobalSessionStateToSelectedActive();
+        }
+      }
+    }, 2000);
+
+  } catch (err: any) {
+    console.error(`Fatal root initialization exception for +${phoneNumber}:`, err);
+    const sess = activeSessions.get(phoneNumber);
+    if (sess) {
+      sess.status = "error";
+      sess.error = err.message || "Root activation initialization error.";
+      updateGlobalSessionStateToSelectedActive();
+    }
+  }
+}
+
+// --- TELEGRAM BOT SERVICE ---
+let TG_TOKEN = "8338208274:AAFDAeCyx5kEVaKXLf8sHmRbzsNbAjH3bAU";
+
+// Dynamically sync and prioritize the custom bot token from ws.py or .env
+try {
+  const wsPyPath = path.join(process.cwd(), "ws.py");
+  if (fs.existsSync(wsPyPath)) {
+    const pyContent = fs.readFileSync(wsPyPath, "utf-8");
+    const pyMatch = pyContent.match(/TG_TOKEN\s*=\s*["']([^"']+)["']/);
+    if (pyMatch && pyMatch[1]) {
+      TG_TOKEN = pyMatch[1].trim();
+      console.log(`[Telegram Bot] Successfully synced and applied TG_TOKEN from ws.py: ${TG_TOKEN.substring(0, 8)}...`);
+    }
+  }
+  if (process.env.TG_TOKEN) {
+    TG_TOKEN = process.env.TG_TOKEN.trim();
+    console.log(`[Telegram Bot] Applied TG_TOKEN from environment variables: ${TG_TOKEN.substring(0, 8)}...`);
+  }
+} catch (e: any) {
+  console.error("[Telegram Bot] Tried syncing TG_TOKEN from ws.py but failed:", e.message || e);
+}
+
+let TG_API_URL = `https://api.telegram.org/bot${TG_TOKEN}`;
+
+async function sendTelegramMessage(chatId: number, text: string, parseMode = "Markdown"): Promise<number | null> {
+  try {
+    const response = await fetch(`${TG_API_URL}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        parse_mode: parseMode,
+      }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      return data.result?.message_id || null;
+    } else {
+      console.error("[Telegram bot] sendMessage returned status:", response.status, await response.text());
+    }
+  } catch (err) {
+    console.error("[Telegram bot] Failed request sending message:", err);
+  }
+  return null;
+}
+
+async function editTelegramMessage(chatId: number, messageId: number, text: string, parseMode = "Markdown") {
+  try {
+    const response = await fetch(`${TG_API_URL}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text: text,
+        parse_mode: parseMode,
+      }),
+    });
+    if (!response.ok) {
+      console.error("[Telegram bot] editMessageText returned status:", response.status, await response.text());
+    }
+  } catch (err) {
+    console.error("[Telegram bot] Failed request editing message:", err);
+  }
+}
+
+async function sendTelegramDocument(chatId: number, fileContent: string, fileName: string, caption: string) {
+  try {
+    const formData = new FormData();
+    formData.append("chat_id", chatId.toString());
+    formData.append("caption", caption);
+    
+    const blob = new Blob([fileContent], { type: "text/plain" });
+    formData.append("document", blob, fileName);
+
+    const response = await fetch(`${TG_API_URL}/sendDocument`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      console.error("[Telegram bot] sendDocument failed:", await response.text());
+    }
+  } catch (err) {
+    console.error("[Telegram bot] Error sending document:", err);
+  }
+}
+
+async function startTelegramBot() {
+  console.log(`[Telegram Bot] Starting custom long-polling thread for token: ${TG_TOKEN.substring(0, 8)}...`);
+  
+  // Reset any existing Telegram webhook to make sure we can poll via getUpdates
+  try {
+    const delResp = await fetch(`${TG_API_URL}/deleteWebhook`, { method: "POST" });
+    const delText = await delResp.text();
+    console.log(`[Telegram Bot] deleteWebhook on startup: ${delResp.status} - ${delText}`);
+    
+    // Check bot profile details
+    const meResp = await fetch(`${TG_API_URL}/getMe`);
+    if (meResp.status === 200) {
+      const meData = await meResp.json() as any;
+      const botUser = meData?.result?.username || "Unknown";
+      console.log(`[Telegram Bot] Connected successfully to bot: @${botUser} (ID: ${meData?.result?.id})`);
+    } else {
+      console.warn(`[Telegram Bot] WARNING: getMe returned status ${meResp.status} - ${await meResp.text()}`);
+    }
+  } catch (e) {
+    console.error(`[Telegram Bot] Exception during webhook reset / getMe:`, e);
+  }
+
+  let offset = 0;
+
+  while (true) {
+    try {
+      const response = await fetch(`${TG_API_URL}/getUpdates?offset=${offset}&timeout=30`, {
+        signal: AbortSignal.timeout(45000)
+      });
+
+      if (!response.ok) {
+        console.warn("[Telegram Bot] HTTP error polling updates, re-trying in 5s... Status:", response.status);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        continue;
+      }
+
+      const data = await response.json();
+      if (data.ok && Array.isArray(data.result)) {
+        for (const update of data.result) {
+          offset = Math.max(offset, update.update_id + 1);
+          if (update.message) {
+            try {
+              await handleTelegramMessage(update.message);
+            } catch (msgErr) {
+              console.error("[Telegram Bot] Error handling individual updater:", msgErr);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn("[Telegram Bot] Polling handshake issue, retrying in 5 seconds:", err.message || err);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+}
+
+async function handleTelegramDocumentMessage(chatId: number, document: any) {
+  const fileId = document.file_id;
+  const fileName = document.file_name || "numbers.txt";
+  
+  await sendTelegramMessage(chatId, `⏳ *${fileName}* ফাইলটি প্রসেস করা হচ্ছে... নম্বরগুলো নিষ্কাশন করা হচ্ছে।`);
+  
+  try {
+    // 1. Get file path from Telegram API
+    const fileInfoRes = await fetch(`${TG_API_URL}/getFile?file_id=${fileId}`);
+    if (!fileInfoRes.ok) {
+      throw new Error(`Telegram getFile API failed with status ${fileInfoRes.status}`);
+    }
+    const fileInfoData = await fileInfoRes.json();
+    if (!fileInfoData.ok || !fileInfoData.result?.file_path) {
+      throw new Error("Failed to resolve file path from Telegram API response.");
+    }
+    
+    const filePath = fileInfoData.result.file_path;
+    
+    // 2. Fetch the file content from Telegram's file server
+    const fileDownloadUrl = `https://api.telegram.org/file/bot${TG_TOKEN}/${filePath}`;
+    const fileDownloadRes = await fetch(fileDownloadUrl);
+    if (!fileDownloadRes.ok) {
+      throw new Error(`Failed to download file from Telegram storage: ${fileDownloadRes.statusText}`);
+    }
+    
+    const fileText = await fileDownloadRes.text();
+    
+    // 3. Extract numbers using regex
+    const numRegex = /(\+?[0-9]{8,15})/g;
+    const matches = fileText.match(numRegex);
+    
+    if (matches && matches.length > 0) {
+      const matchesArray = matches.map((m: string) => m.trim());
+      await checkAndRespondBatch(chatId, matchesArray);
+    } else {
+      await sendTelegramMessage(chatId, "⚠️ ফাইলটিতে কোনো সঠিক ৮ থেকে ১৫ ডিজিটের মোবাইল নম্বর পাওয়া যায়নি। অনুগ্রহ করে সঠিক টেক্সট বা সিএসভি ফাইল আপলোড দিন।");
+    }
+  } catch (err: any) {
+    console.error("[Telegram Bot] Error processing document:", err);
+    await sendTelegramMessage(chatId, `❌ ফাইল প্রসেস করার সময় ভুল হয়েছে: ${err.message || err}`);
+  }
+}
+
+async function handleTelegramMessage(message: any) {
+  const chatId = message.chat.id;
+
+  // Handle document file upload if any phone numbers file is sent
+  if (message.document) {
+    await handleTelegramDocumentMessage(chatId, message.document);
+    return;
+  }
+
+  const text = message.text ? message.text.trim() : "";
+  if (!text) return;
+
+  // COMMAND: /start
+  if (text.startsWith("/start")) {
+    const startMsg = 
+      `👋 *স্বাগতম! আমি আপনার লিঙ্কফাই হোয়াটসঅ্যাপ রোবট (Linkify Bot)।*\n\n` +
+      `আপনার টেলিগ্রাম বট থেকে সরাসরি হোয়াটসঅ্যাপ লগইন এবং নম্বর চেক করতে পারবেন।\n\n` +
+      `📌 *কমান্ডসমূহ (Commands):*\n` +
+      `▫️ \`/login <ফোন নম্বর>\` - নতুন কোনো হোয়াটসঅ্যাপ অ্যাকাউন্ট লিঙ্ক করার জন্য কোড জেনারেট করুন। (যেমন: \`/login 8801700000000\`)\n` +
+      `▫️ \`/check <ফোন নম্বর>\` - কোনো একটি নাম্বারের হোয়াটসঅ্যাপ আইডি আছে কিনা চেক করুন। (যেমন: \`/check 8801712345678\`)\n` +
+      `▫️ \`/status\` - লিঙ্ককৃত হোয়াটসঅ্যাপ এ্যাকাউন্ট এবং কানেকশন স্ট্যাটাস দেখার জন্য।\n` +
+      `▫️ \`/logout <ফোন নম্বর>\` - কোনো অ্যাকাউন্ট মুছে ফেলার জন্য। (যেমন: \`/logout 8801700000000\`)\n\n` +
+      `💡 *বাল্ক হোয়াটসঅ্যাপ চেক:* যেকোনো সাধারণ মেসেজে এক বা একাধিক মোবাইল নম্বর একসাথে পাঠালে অথবা কোনো টেক্সট/সিএসভি ফাইল আপলোড করলে আমি অটো চেক করে একটি চমৎকার রিপোর্ট পাঠিয়ে দেবো!`;
+    await sendTelegramMessage(chatId, startMsg);
+    return;
+  }
+
+  // COMMAND: /login <phone_number>
+  if (text.startsWith("/login")) {
+    const rawPhoneInput = text.substring(6).trim();
+    if (!rawPhoneInput) {
+      await sendTelegramMessage(chatId, "⚠️ অনুগ্রহ করে ফোন নম্বরটি লিখুন। যেমন: `/login 8801700000000` ");
+      return;
+    }
+    const phoneCleaned = normalizePhone(rawPhoneInput);
+
+    if (phoneCleaned.length < 8) {
+      await sendTelegramMessage(chatId, "⚠️ অনুগ্রহ করে সঠিক ফোন নম্বরটি লিখুন। যেমন: `/login 8801700000000` ");
+      return;
+    }
+
+    await sendTelegramMessage(chatId, `⌛ *+${phoneCleaned}* নম্বরের জন্য হোয়াটসঅ্যাপ সার্ভার থেকে কানেকশন কোড জেনারেট হচ্ছে... দয়া করে অপেক্ষা করুন।`);
+
+    // Bootstrap connection setup
+    const senderName = message.from?.first_name || message.chat?.first_name || "Telegram User";
+    linkingOwners.set(phoneCleaned, { chatId, name: senderName });
+
+    currentActivePhone = phoneCleaned;
+    await initWhatsApp(phoneCleaned);
+
+    // Dynamic wait for pairing code to generate
+    let counter = 0;
+    const maxRetries = 15;
+    const timer = setInterval(async () => {
+      counter++;
+      const currentSession = activeSessions.get(phoneCleaned);
+      if (currentSession && currentSession.status === "pairing-code-ready" && currentSession.pairingCode) {
+        clearInterval(timer);
+        const codeMsg = 
+          `🔑 *আপনার হোয়াটসঅ্যাপ পেয়ারিং কোড:* \n\n` +
+          `👉 \`${currentSession.pairingCode}\` 👈\n\n` +
+          `*কিভাবে ব্যবহার করবেন:*\n` +
+          `১. আপনার মোবাইলের WhatsApp অ্যাপ ওপেন করুন।\n` +
+          `২. ডান কোণের থ্রি-ডট মেনু থেকে *Linked Devices* এ ক্লিক করুন।\n` +
+          `৩. *Link a Device* বাটনে ট্যাপ করে নিচে *Link with phone number instead* অপশনটি সিলেক্ট করুন।\n` +
+          `৪. স্ক্রিনে কোডটি ইনপুট দিন।\n\n` +
+          `বটের সাথে একাউন্ট সফলভাবে সিঙ্ক হয়ে যাবে! 🚀`;
+        await sendTelegramMessage(chatId, codeMsg);
+      } else if (currentSession && currentSession.status === "error") {
+        clearInterval(timer);
+        await sendTelegramMessage(chatId, `❌ কোড জেনারেট করতে ব্যর্থ হয়েছে।\nকারণ: ${currentSession.error || 'WhatsApp Server Refusal'}`);
+      } else if (counter >= maxRetries) {
+        clearInterval(timer);
+        await sendTelegramMessage(chatId, `⏳ কোড সিস্টেমে জেনারেট হতে একটু সময় নিচ্ছে। অনুগ্রহ করে ১ মিনিট পর \`/status\` কমান্ড দিয়ে চেক করুন।`);
+      }
+    }, 1000);
+    return;
+  }
+
+  // COMMAND: /status
+  if (text.startsWith("/status")) {
+    const saved = getSavedAccountsList();
+    if (saved.length === 0) {
+      await sendTelegramMessage(chatId, "ℹ️ লোকাল ডাটাবেজে কোনো হোয়াটসঅ্যাপ অ্যাকাউন্ট লিঙ্ক করা নেই। লিঙ্ক করতে অনুগ্রহ করে `/login <ফোন নম্বর>` লিখুন।");
+      return;
+    }
+
+    const myAccounts = saved.filter(acc => acc.addedByChatId === chatId);
+    const otherAccounts = saved.filter(acc => acc.addedByChatId && acc.addedByChatId !== chatId);
+
+    let statusMsg = `📊 *হোয়াটসঅ্যাপ কানেকশন স্ট্যাটাস:* \n\n`;
+
+    if (myAccounts.length > 0) {
+      statusMsg += `👤 *আপনার নিজস্ব লিঙ্ককৃত অ্যাকাউন্টসমূহ (${myAccounts.length} টি):*\n`;
+      myAccounts.forEach((acc, idx) => {
+        const activeS = activeSessions.get(acc.phone);
+        const onlineStatus = activeS ? activeS.status : "disconnected";
+        const statusEmoji = onlineStatus === "connected" ? "🟢 Connected" : onlineStatus === "connecting" ? "🟡 Connecting" : "🔴 Offline";
+        statusMsg += `${idx + 1}. *+${acc.phone}* (${acc.name || "WhatsApp User"})\n   স্ট্যাটাস: ${statusEmoji}\n`;
+      });
+      statusMsg += `\n`;
+    } else {
+      statusMsg += `⚠️ *আপনার নিজস্ব কোনো লিঙ্ককৃত অ্যাকাউন্ট নেই!*\nনতুন অ্যাকাউন্ট লিঙ্ক করতে টাইপ করুন: \`/login <ফোন নম্বর>\`।\n\n`;
+    }
+
+    if (otherAccounts.length > 0) {
+      statusMsg += `👥 *অন্যান্য ব্যবহারকারীদের অ্যাকাউন্টসমূহ (${otherAccounts.length} টি):*\n`;
+      otherAccounts.forEach((acc, idx) => {
+        const activeS = activeSessions.get(acc.phone);
+        const onlineStatus = activeS ? activeS.status : "disconnected";
+        const statusEmoji = onlineStatus === "connected" ? "🟢 Online" : "🔴 Offline";
+        const maskedPhone = acc.phone.slice(0, 5) + "****" + acc.phone.slice(-3);
+        statusMsg += `${idx + 1}. *+${maskedPhone}* (যোগ করেছেন: ${acc.addedByName || "ব্যবহারকারী"})\n   স্ট্যাটাস: ${statusEmoji}\n`;
+      });
+      statusMsg += `\n`;
+    }
+
+    if (currentActivePhone) {
+      const isMyChoice = myAccounts.some(acc => acc.phone === currentActivePhone);
+      statusMsg += `🎯 *ডিফল্ট রানটাইম গেটওয়ে:* \`+${currentActivePhone}\` ${isMyChoice ? "(আপনার অ্যাকাউন্ট)" : "(অন্য ব্যবহারকারী/সিস্টেম)"}`;
+    }
+
+    await sendTelegramMessage(chatId, statusMsg);
+    return;
+  }
+
+  // COMMAND: /logout <phone>
+  if (text.startsWith("/logout")) {
+    const rawPhoneInput = text.substring(7).trim();
+    if (!rawPhoneInput) {
+      await sendTelegramMessage(chatId, "⚠️ অনুগ্রহ করে ফোন নম্বরটি লিখুন। যেমন: `/logout 8801700000000` ");
+      return;
+    }
+    const phoneCleaned = normalizePhone(rawPhoneInput);
+
+    const existed = deleteAccountFromDb(phoneCleaned);
+    if (existed) {
+      await sendTelegramMessage(chatId, `✅ *+${phoneCleaned}* অ্যাকাউন্টটি লোকাল ডাটাবেজ থেকে মুছে ফেলা এবং সেশন ডিসকানেক্ট করা হয়েছে।`);
+    } else {
+      await sendTelegramMessage(chatId, `⚠️ *+${phoneCleaned}* অ্যাকাউন্টটি লোকাল ডাটাবেজে পাওয়া যায়নি।`);
+    }
+    return;
+  }
+
+  // COMMAND: /check <number>
+  if (text.startsWith("/check")) {
+    const rawInput = text.substring(6).trim();
+    if (!rawInput) {
+      await sendTelegramMessage(chatId, "⚠️ অনুগ্রহ করে ফোন নম্বরটি লিখুন। যেমন: `/check 8801712345678` ");
+      return;
+    }
+    await checkAndRespondBatch(chatId, [rawInput]);
+    return;
+  }
+
+  // RAW MESSAGE BULK PARSING CHECKER ENGINER
+  // Extract patterns looking like 8-15 digit mobile numbers
+  const numRegex = /(\+?[0-9]{8,15})/g;
+  const matches = text.match(numRegex);
+  if (matches && matches.length > 0) {
+    const matchesArray = matches.map((m: string) => m.trim());
+    await checkAndRespondBatch(chatId, matchesArray);
+  } else {
+    // Standard prompt fallback
+    await sendTelegramMessage(chatId, "ℹ️ অনুগ্রহ করে হোয়াটসঅ্যাপ চেক করার জন্য কোনো নম্বর প্রেরণ করুন অথবা বটের বিস্তারিত তালিকা নিয়ে স্টার্ট দিতে `/start` লিখুন।");
+  }
+}
+
+async function checkAndRespondBatch(chatId: number, rawNumbers: string[]) {
+  // Find any active linked connected WhatsApp model belonging to this specific user FIRST
+  let resolvedSession: ConnectedSession | null = null;
+  const saved = getSavedAccountsList();
+  const myAccounts = saved.filter(acc => acc.addedByChatId === chatId);
+
+  for (const acc of myAccounts) {
+    const activeS = activeSessions.get(acc.phone);
+    if (activeS && activeS.status === "connected" && activeS.sock) {
+      resolvedSession = activeS;
+      break;
+    }
+  }
+
+  // Fallback to globally designated active phone if none of the requester's accounts are connected
+  if (!resolvedSession && currentActivePhone) {
+    const activeS = activeSessions.get(currentActivePhone);
+    if (activeS && activeS.status === "connected" && activeS.sock) {
+      resolvedSession = activeS;
+    }
+  }
+
+  // Secondary fallback to absolutely any connected session
+  if (!resolvedSession) {
+    for (const session of activeSessions.values()) {
+      if (session.status === "connected" && session.sock) {
+        resolvedSession = session;
+        break;
+      }
+    }
+  }
+
+  if (!resolvedSession) {
+    await sendTelegramMessage(chatId, "⚠️ *দুঃখিত, কোনো সক্রিয় হোয়াটসঅ্যাপ অ্যাকাউন্ট সংযুক্ত নেই!* \n\nঅনুগ্রহ করে প্রথমে বটের সাথে নতুন অ্যাকাউন্ট লিঙ্ক করতে টাইপ করুন: \`/login <ফোন নম্বর>\`।");
+    return;
+  }
+
+  const normalizedList: string[] = [];
+  const seen = new Set<string>();
+
+  for (const num of rawNumbers) {
+    const clean = normalizePhone(num);
+    if (!clean || clean.length < 6) continue;
+
+    if (seen.has(clean)) continue;
+    seen.add(clean);
+    normalizedList.push(clean);
+  }
+
+  if (normalizedList.length === 0) {
+    await sendTelegramMessage(chatId, "⚠️ কোনো সঠিক মোবাইল নম্বর খুঁজে পাওয়া যায়নি। দয়া করে সঠিক নম্বর ইনপুট দিন।");
+    return;
+  }
+
+  const progressMsgId = await sendTelegramMessage(
+    chatId, 
+    `🔍 *হোয়াটসঅ্যাপ ডেটাবেজ চেক করা হচ্ছে...* \n\n` +
+    `মোট ইউনিক নম্বর: *${normalizedList.length}* টি।\n` +
+    `সক্রিয় গেটওয়ে: *+${resolvedSession.phoneNumber}*`
+  );
+
+  const activeWA: string[] = [];
+  const inactiveWA: string[] = [];
+
+  // Optimized query size of 50 numbers at a time for fast processing
+  const chunkSize = 50;
+
+  for (let i = 0; i < normalizedList.length; i += chunkSize) {
+    const chunk = normalizedList.slice(i, i + chunkSize);
+    const jidsToQuery = chunk.map(num => `${num}@s.whatsapp.net`);
+    const jidToNumMap = new Map<string, string>();
+    chunk.forEach(num => jidToNumMap.set(`${num}@s.whatsapp.net`, num));
+
+    const chunkExists = new Set<string>();
+
+    let retryCount = 0;
+    let querySuccess = false;
+
+    while (retryCount < 2 && !querySuccess) {
+      try {
+        if (resolvedSession && resolvedSession.sock) {
+          const result = await resolvedSession.sock.onWhatsApp(...jidsToQuery);
+          if (result && Array.isArray(result)) {
+            for (const item of result) {
+              if (item.exists) {
+                chunkExists.add(item.jid);
+              }
+            }
+          }
+          querySuccess = true;
+        } else {
+          break; // No active session
+        }
+      } catch (e: any) {
+        retryCount++;
+        console.warn(`[Telegram Bulk Check] Chunk query failed (attempt ${retryCount}/2):`, e?.message || e);
+        if (retryCount >= 2) {
+          console.log("[Telegram Bulk Check] Falling back to one-by-one queries for this chunk to bypass batch failure.");
+          for (const jid of jidsToQuery) {
+            try {
+              if (resolvedSession && resolvedSession.sock) {
+                const result = await resolvedSession.sock.onWhatsApp(jid);
+                if (result && Array.isArray(result) && result[0]?.exists) {
+                  chunkExists.add(jid);
+                }
+              }
+              await new Promise(r => setTimeout(r, 80));
+            } catch (singleErr: any) {
+              console.error(`[Telegram Bulk Check] Individual backup query failed for ${jid}:`, singleErr?.message || singleErr);
+            }
+          }
+          querySuccess = true;
+        } else {
+          await new Promise(resolve => setTimeout(resolve, 800));
+        }
+      }
+    }
+
+    for (const jid of jidsToQuery) {
+      const num = jidToNumMap.get(jid);
+      if (num) {
+        if (chunkExists.has(jid)) {
+          activeWA.push(num);
+        } else {
+          inactiveWA.push(num);
+        }
+      }
+    }
+
+    // Real-time progress edit for large batches
+    if (normalizedList.length > 50 && progressMsgId) {
+      const percentage = Math.round((Math.min(i + chunkSize, normalizedList.length) / normalizedList.length) * 100);
+      await editTelegramMessage(
+        chatId,
+        progressMsgId,
+        `🔍 *হোয়াটসঅ্যাপ ডেটাবেজ চেক করা হচ্ছে...* \n\n` +
+        `⏳ অগ্রগতি: *${Math.min(i + chunkSize, normalizedList.length)}/${normalizedList.length}* টি নম্বর চেক সম্পন্ন হয়েছে (*${percentage}%*)।\n` +
+        `🟢 সক্রিয়: *${activeWA.length}* | 🔴 নিষ্ক্রিয়: *${inactiveWA.length}*`
+      );
+    }
+
+    if (i + chunkSize < normalizedList.length) {
+      await new Promise(resolve => setTimeout(resolve, 800));
+    }
+  }
+
+  // Delivery of the reports
+  if (normalizedList.length <= 30) {
+    const resultReport = 
+      `🤖 *বাল্ক নম্বর চেকার রিপোর্ট (Bulk Report)*\n\n` +
+      `📊 *মোট ইউনিক নম্বর:* ${normalizedList.length} টি\n` +
+      `✅ *হোয়াটসঅ্যাপ রয়েছে (${activeWA.length} টি):*\n` +
+      `${activeWA.length > 0 ? activeWA.map(item => `+${item}`).join("\n") : "_কোনোটিই নয়_"}\n\n` +
+      `❌ *হোয়াটসঅ্যাপ খোলা নেই (${inactiveWA.length} টি):*\n` +
+      `${inactiveWA.length > 0 ? inactiveWA.map(item => `+${item}`).join("\n") : "_কোনোটিই নয়_"}`;
+
+    if (progressMsgId) {
+      await editTelegramMessage(chatId, progressMsgId, resultReport);
+    } else {
+      await sendTelegramMessage(chatId, resultReport);
+    }
+  } else {
+    // Generate text report body
+    const activeText = activeWA.map(item => `+${item}`).join("\n");
+    const inactiveText = inactiveWA.map(item => `+${item}`).join("\n");
+
+    const summaryReport = 
+      `🤖 *বাল্ক নম্বর চেকার রিপোর্ট (Bulk Report)*\n\n` +
+      `📊 *মোট ইউনিক নম্বর:* ${normalizedList.length} টি\n` +
+      `🟢 *সক্রিয় হোয়াটসঅ্যাপ অ্যাকাউন্ট:* ${activeWA.length} টি\n` +
+      `🔴 *হোয়াটসঅ্যাপ খোলা নেই:* ${inactiveWA.length} টি\n\n` +
+      `📂 বিস্তারিত তালিকা নিচের টেক্সট ফাইলে সরবরাহ করা হলো।`;
+
+    if (progressMsgId) {
+      await editTelegramMessage(chatId, progressMsgId, summaryReport);
+    } else {
+      await sendTelegramMessage(chatId, summaryReport);
+    }
+
+    // Deliver files
+    if (activeWA.length > 0) {
+      await sendTelegramDocument(
+        chatId,
+        activeText,
+        "active_whatsapp_numbers.txt",
+        `🟢 সকল সক্রিয় হোয়াটসঅ্যাপ নম্বরসমূহ (${activeWA.length} টি)`
+      );
+    }
+    if (inactiveWA.length > 0) {
+      await sendTelegramDocument(
+        chatId,
+        inactiveText,
+        "inactive_whatsapp_numbers.txt",
+        `🔴 সকল হোয়াটসঅ্যাপ খোলা নেই এমন নম্বরসমূহ (${inactiveWA.length} টি)`
+      );
+    }
+  }
+}
+
+// --- REST API ENDPOINTS ---
+app.get("/api/request-code", async (req, res) => {
+  const phoneParam = req.query.phone as string;
+  if (!phoneParam) {
+    return res.status(400).json({ error: "Phone number is required." });
+  }
+
+  // Sanitize and normalize phone number
+  const phoneCleaned = normalizePhone(phoneParam);
+
+  if (phoneCleaned.length < 8) {
+    return res.status(400).json({ error: "Invalid phone number format." });
+  }
+
+  console.log("Requested Pairing Code for cleaned phone number:", phoneCleaned);
+  currentActivePhone = phoneCleaned;
+  initWhatsApp(phoneCleaned);
+
+  res.json({
+    status: "processing",
+    phone: phoneCleaned,
+  });
+});
+
+app.get("/api/status", (req, res) => {
+  updateGlobalSessionStateToSelectedActive();
+  res.json(sessionState);
+});
+
+app.get("/api/reset-session", (req, res) => {
+  if (currentActivePhone) {
+    deleteAccountFromDb(currentActivePhone);
+  }
+  res.json({ status: "ok" });
+});
+
+app.post("/api/send-message", async (req, res) => {
+  const { to, text } = req.body;
+  if (!activeSock || sessionState.status !== "connected") {
+    return res.status(400).json({ error: "WhatsApp is not connected." });
+  }
+
+  if (!to || !text) {
+    return res.status(400).json({ error: "Recipient and text message are required." });
+  }
+
+  try {
+    const cleanTo = to.replace(/\D/g, "");
+    const jid = `${cleanTo}@s.whatsapp.net`;
+    const result = await activeSock.sendMessage(jid, { text });
+    res.json({ success: true, result });
+  } catch (err: any) {
+    console.error("Error sending custom message via Baileys:", err);
+    res.status(500).json({ error: err.message || "Failed to send message." });
+  }
+});
+
+// Endpoint to check if a phone number exists on WhatsApp with robust multi-step fallbacks
+app.get("/api/check-phone", async (req, res) => {
+  const phoneParam = req.query.phone as string;
+  
+  if (!activeSock || sessionState.status !== "connected") {
+    return res.status(400).json({ error: "WhatsApp is not connected. Please connect first." });
+  }
+
+  if (!phoneParam) {
+    return res.status(400).json({ error: "Phone number is required." });
+  }
+
+  try {
+    // Clean and normalize the phone input using robust normalization helper
+    const cleanPhone = normalizePhone(phoneParam);
+
+    const jid = `${cleanPhone}@s.whatsapp.net`;
+    console.log(`[Presence Checker] Querying presence for normalized JID: ${jid} (raw: ${phoneParam})`);
+
+    let exists = false;
+    let resolvedJid = jid;
+
+    try {
+      const result = await activeSock.onWhatsApp(jid);
+      console.log("[Presence Checker] Baileys onWhatsApp result:", result);
+      if (result && result.length > 0 && result[0].exists) {
+        exists = true;
+        resolvedJid = result[0].jid;
+      }
+    } catch (err: any) {
+      console.error("[Presence Checker] onWhatsApp error:", err?.message || err);
+    }
+
+    console.log(`[Presence Checker] Final exists status determined for JID ${jid}: ${exists}`);
+
+    if (exists) {
+      return res.json({
+        exists: true,
+        jid: resolvedJid,
+        phone: cleanPhone,
+      });
+    } else {
+      return res.json({
+        exists: false,
+        phone: cleanPhone,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in check-phone endpoint execution:", err);
+    res.status(500).json({ error: err.message || "Failed to execute presence check on WhatsApp network." });
+  }
+});
+
+// Endpoint to check Telegram Username or Chat ID with live status & linked whatsapp count
+app.get("/api/check-telegram", async (req, res) => {
+  const query = req.query.query as string;
+  if (!query) {
+    return res.status(400).json({ error: "Username or Chat ID is required." });
+  }
+
+  let normalizedQuery = query.trim();
+  // If it starts with alphabets and digit/underscore, we count it as username, append '@' if missing
+  if (/^[a-zA-Z]/.test(normalizedQuery) && !normalizedQuery.startsWith("@")) {
+    normalizedQuery = "@" + normalizedQuery;
+  }
+
+  try {
+    console.log(`[Telegram Checker] Live query to Telegram API: getChat for ${normalizedQuery}`);
+    
+    // Call Telegram getChat API
+    const botRes = await fetch(`${TG_API_URL}/getChat?chat_id=${encodeURIComponent(normalizedQuery)}`);
+    const botData = await botRes.json();
+    
+    // Check local database for linked WhatsApp numbers
+    const allAccounts = getSavedAccountsList();
+    const linkedAccounts = allAccounts.filter(acc => {
+      if (!acc.addedByChatId) return false;
+      const cleanQ = query.trim().toLowerCase().replace("@", "");
+      const matchesId = String(acc.addedByChatId) === query.trim();
+      const matchesUsername = acc.addedByName && acc.addedByName.toLowerCase().includes(cleanQ);
+      return matchesId || matchesUsername;
+    });
+
+    if (botData.ok) {
+      const chat = botData.result;
+      return res.json({
+        exists: true,
+        id: chat.id,
+        type: chat.type,
+        firstName: chat.first_name || "",
+        lastName: chat.last_name || "",
+        username: chat.username || "",
+        title: chat.title || "",
+        bio: chat.bio || "",
+        linkedAccounts: linkedAccounts,
+        raw: chat
+      });
+    } else {
+      // Fallback: If not found in live bot, search local database records
+      if (linkedAccounts.length > 0) {
+        return res.json({
+          exists: true,
+          id: linkedAccounts[0].addedByChatId,
+          firstName: linkedAccounts[0].addedByName || "Telegram User",
+          username: query.startsWith("@") ? query.substring(1) : "",
+          linkedAccounts: linkedAccounts,
+          note: "Found in local database but not live-reachable from Bot API (user must start bot first)."
+        });
+      }
+      
+      return res.json({
+        exists: false,
+        error: botData.description || "Chat not found or bot does not have access to this user."
+      });
+    }
+  } catch (err: any) {
+    console.error("[Telegram Checker] Error:", err);
+    res.status(500).json({ error: err.message || "Failed to check Telegram account." });
+  }
+});
+
+// Endpoint to check multiple phone numbers in bulk with chunking and delay protection
+app.post("/api/check-phone-bulk", async (req, res) => {
+  const { phones } = req.body;
+  
+  if (!activeSock || sessionState.status !== "connected") {
+    return res.status(400).json({ error: "WhatsApp is not connected. Please connect first." });
+  }
+
+  if (!phones || !Array.isArray(phones) || phones.length === 0) {
+    return res.status(400).json({ error: "Phones array is required." });
+  }
+
+  try {
+    const normalizedList: { original: string; cleanPhone: string; jid: string }[] = [];
+    const seen = new Set<string>();
+
+    for (const phone of phones) {
+      if (typeof phone !== "string") continue;
+      
+      const cleanPhone = normalizePhone(phone);
+      if (!cleanPhone || cleanPhone.length < 5) continue;
+
+      if (seen.has(cleanPhone)) continue;
+      seen.add(cleanPhone);
+
+      const jid = `${cleanPhone}@s.whatsapp.net`;
+      normalizedList.push({
+        original: phone,
+        cleanPhone,
+        jid
+      });
+    }
+
+    if (normalizedList.length === 0) {
+      return res.json({ exists: [], notExists: [], total: 0 });
+    }
+
+    console.log(`[Presence Bulk Checker] Starting batch query of ${normalizedList.length} numbers.`);
+
+    // Check in chunks of 50
+    const chunkSize = 50;
+    const existsJids = new Set<string>();
+
+    for (let i = 0; i < normalizedList.length; i += chunkSize) {
+      const chunk = normalizedList.slice(i, i + chunkSize);
+      const jidsToQuery = chunk.map(item => item.jid);
+
+      let retryCount = 0;
+      let querySuccess = false;
+
+      while (retryCount < 2 && !querySuccess) {
+        try {
+          console.log(`[Presence Bulk Checker] Querying chunk ${Math.floor(i / chunkSize) + 1} (attempt ${retryCount + 1})...`);
+          const result = await activeSock.onWhatsApp(...jidsToQuery);
+          if (result && Array.isArray(result)) {
+            for (const item of result) {
+              if (item.exists) {
+                existsJids.add(item.jid);
+              }
+            }
+          }
+          querySuccess = true;
+        } catch (err: any) {
+          retryCount++;
+          console.warn(`[Presence Bulk Checker] Chunk query at index ${i} failed (attempt ${retryCount}/2):`, err?.message || err);
+          if (retryCount >= 2) {
+            console.log("[Presence Bulk Checker] Falling back to one-by-one check to salvage numbers from this failed chunk.");
+            for (const jid of jidsToQuery) {
+              try {
+                if (activeSock) {
+                  const result = await activeSock.onWhatsApp(jid);
+                  if (result && Array.isArray(result) && result[0]?.exists) {
+                    existsJids.add(jid);
+                  }
+                }
+                await new Promise(r => setTimeout(r, 80));
+              } catch (singleErr: any) {
+                console.error(`[Presence Bulk Checker] Individual backup query failed for ${jid}:`, singleErr?.message || singleErr);
+              }
+            }
+            querySuccess = true;
+          } else {
+            await new Promise(resolve => setTimeout(resolve, 800));
+          }
+        }
+      }
+
+      // Small throttling delay to be friendly to standard WhatsApp socket flows
+      if (i + chunkSize < normalizedList.length) {
+        await new Promise(resolve => setTimeout(resolve, 800));
+      }
+    }
+
+    const existsList: any[] = [];
+    const notExistsList: any[] = [];
+
+    for (const item of normalizedList) {
+      if (existsJids.has(item.jid)) {
+        existsList.push({
+          phone: item.cleanPhone,
+          jid: item.jid,
+          original: item.original
+        });
+      } else {
+        notExistsList.push({
+          phone: item.cleanPhone,
+          original: item.original
+        });
+      }
+    }
+
+    console.log(`[Presence Bulk Checker] Completed. Active: ${existsList.length}, Missing: ${notExistsList.length}`);
+
+    return res.json({
+      exists: existsList,
+      notExists: notExistsList,
+      total: normalizedList.length
+    });
+
+  } catch (err: any) {
+    console.error("Error in check-phone-bulk handler:", err);
+    res.status(500).json({ error: err.message || "Failed to execute bulk presence query on WhatsApp." });
+  }
+});
+
+// --- TELEGRAM ACCOUNT MULTI-SESSION API ENDPOINTS ---
+app.get("/api/telegram/accounts", (req, res) => {
+  const dbAccounts = getSavedTgAccountsList();
+  const results = dbAccounts.map(acc => {
+    const session = activeTgSessions.get(acc.phone);
+    return {
+      phone: acc.phone,
+      name: acc.name,
+      username: acc.username,
+      linkedAt: acc.linkedAt,
+      status: session && session.client && session.client.connected ? "connected" : "disconnected",
+    };
+  });
+  res.json({ accounts: results });
+});
+
+app.post("/api/telegram/request-otp", async (req, res) => {
+  const { phone, apiId, apiHash } = req.body;
+  if (!phone) {
+    return res.status(400).json({ error: "Phone number is required." });
+  }
+
+  const cleanPhone = phone.replace(/\D/g, "");
+  const selectedApiId = Number(apiId) || TG_API_ID;
+  const selectedApiHash = apiHash || TG_API_HASH;
+
+  try {
+    console.log(`[Telegram Auth] Sending OTP to +${cleanPhone}...`);
+    const session = new StringSession("");
+    const client = new TelegramClient(session, selectedApiId, selectedApiHash, {
+      connectionRetries: 3,
+    });
+
+    await client.connect();
+
+    const { phoneCodeHash } = await client.sendCode(
+      {
+        apiId: selectedApiId,
+        apiHash: selectedApiHash,
+      },
+      "+" + cleanPhone
+    );
+
+    const tempToken = "tg_" + Math.random().toString(36).substring(2, 15);
+    pendingTgLogins.set(tempToken, {
+      client,
+      phoneNumber: "+" + cleanPhone,
+      phoneCodeHash,
+      expiresAt: Date.now() + 10 * 60 * 1000, 
+    });
+
+    res.json({
+      success: true,
+      tempToken,
+      phone: cleanPhone
+    });
+  } catch (err: any) {
+    console.error("[Telegram Auth] sendCode Error:", err);
+    res.status(500).json({ error: err.message || "Failed to send Telegram authentication code." });
+  }
+});
+
+app.post("/api/telegram/verify-otp", async (req, res) => {
+  const { tempToken, code, password } = req.body;
+  if (!tempToken || !code) {
+    return res.status(400).json({ error: "Verification token and code are required." });
+  }
+
+  const pending = pendingTgLogins.get(tempToken);
+  if (!pending) {
+    return res.status(400).json({ error: "Session expired or invalid. Please request code again." });
+  }
+
+  const { client, phoneNumber, phoneCodeHash } = pending;
+
+  try {
+    let authUser;
+    
+    if (password) {
+      authUser = await client.signIn({
+        phoneNumber,
+        password: async () => password,
+        phoneCodeHash,
+        phoneCode: code
+      });
+    } else {
+      try {
+        authUser = await client.signIn({
+          phoneNumber,
+          phoneCodeHash,
+          phoneCode: code,
+        });
+      } catch (signInErr: any) {
+        if (signInErr.message?.includes("SESSION_PASSWORD_NEEDED")) {
+          return res.json({
+            success: false,
+            passwordRequired: true,
+            message: "Two-Factor Authentication (2FA) is enabled. Please provide your cloud password."
+          });
+        }
+        throw signInErr;
+      }
+    }
+
+    const me = await client.getMe();
+    const sessionStr = String(client.session.save());
+
+    const cleanPhone = phoneNumber.replace(/\D/g, "");
+    saveTgAccountToDb(cleanPhone, me.firstName || "Telegram User", me.username || "", sessionStr);
+
+    activeTgSessions.set(cleanPhone, { client, status: "connected" });
+    pendingTgLogins.delete(tempToken);
+
+    startTgUserbotListeners(client, cleanPhone);
+
+    res.json({
+      success: true,
+      me: {
+        id: me.id ? me.id.toString() : "",
+        firstName: me.firstName || "",
+        lastName: me.lastName || "",
+        username: me.username || "",
+        phone: cleanPhone
+      }
+    });
+  } catch (err: any) {
+    console.error("[Telegram Auth] signin Error:", err);
+    res.status(500).json({ error: err.message || "Failed to authenticate with Telegram. Double check the OTP or password." });
+  }
+});
+
+app.post("/api/telegram/delete-account", (req, res) => {
+  const { phone } = req.body;
+  if (!phone) {
+    return res.status(400).json({ error: "Phone number is required." });
+  }
+  const success = deleteTgAccountFromDb(phone.replace(/\D/g, ""));
+  res.json({ success });
+});
+
+// TELEGRAM PHONE CHECKER (Checks if a single phone number is registered on Telegram)
+app.get("/api/telegram/check-phone", async (req, res) => {
+  const { phone, clientPhone } = req.query;
+  if (!phone) {
+    return res.status(400).json({ error: "Target phone number to check is required." });
+  }
+
+  // Find a client to query from
+  let senderPhone = clientPhone as string;
+  if (!senderPhone || senderPhone === "undefined") {
+    const clients = Array.from(activeTgSessions.keys());
+    if (clients.length > 0) {
+      senderPhone = clients[0];
+    } else {
+      const dbAccounts = getSavedTgAccountsList();
+      if (dbAccounts.length > 0) {
+        senderPhone = dbAccounts[0].phone;
+      }
+    }
+  }
+
+  if (!senderPhone) {
+    return res.status(400).json({
+      error: "No active Telegram logins are connected! Please log in to a Telegram account (e.g., in the Telegram sessions tab) before checking numbers."
+    });
+  }
+
+  try {
+    const targetPhone = String(phone).replace(/\D/g, "");
+    const client = await getActiveTgClient(senderPhone);
+
+    console.log(`[Telegram Check-Phone API] Checking +${targetPhone} using +${senderPhone}...`);
+
+    const result = await client.invoke(
+      new Api.contacts.ImportContacts({
+        contacts: [
+          new Api.InputPhoneContact({
+            clientId: Math.floor(Math.random() * 10000000) as any,
+            phone: targetPhone.startsWith("+") ? targetPhone : "+" + targetPhone,
+            firstName: "TempCheck",
+            lastName: ""
+          })
+        ]
+      })
+    );
+
+    if (result && result.users && result.users.length > 0) {
+      const user: any = result.users[0];
+      
+      // Clean up of temporary contact import list
+      if (user.id) {
+        try {
+          await client.invoke(
+            new Api.contacts.DeleteContacts({ id: [user.id] })
+          );
+        } catch (delErr) {
+          console.error("[Telegram Check-Phone API] Deleted contacts failed cleaner:", delErr);
+        }
+      }
+
+      const isRealUser = user.className === "User" || user.id;
+      if (isRealUser) {
+        return res.json({
+          exists: true,
+          phone: user.phone || targetPhone,
+          id: user.id ? user.id.toString() : "",
+          firstName: user.firstName || "",
+          lastName: user.lastName || "",
+          username: user.username || "",
+          isBot: user.bot || false
+        });
+      }
+    }
+
+    return res.json({
+      exists: false,
+      phone: targetPhone
+    });
+  } catch (err: any) {
+    console.error(`[Telegram Check-Phone API] Error for +${phone}:`, err);
+    res.status(500).json({ error: err.message || "Could not check registered state via Telegram Client." });
+  }
+});
+
+// NEW MULTI-ACCOUNT API ENDPOINTS FOR CLIENT UI EXTENSION
+app.get("/api/accounts", (req, res) => {
+  const dbAccounts = getSavedAccountsList();
+  const results = dbAccounts.map(acc => {
+    const session = activeSessions.get(acc.phone);
+    return {
+      ...acc,
+      status: session ? session.status : "disconnected",
+      error: session ? session.error : null,
+    };
+  });
+  res.json({
+    accounts: results,
+    currentActivePhone: currentActivePhone
+  });
+});
+
+app.post("/api/switch-account", (req, res) => {
+  const { phone } = req.body;
+  if (!phone) {
+    return res.status(400).json({ error: "Phone number is required." });
+  }
+  const dbAccounts = getSavedAccountsList();
+  const exists = dbAccounts.some(acc => acc.phone === phone);
+  if (!exists) {
+    return res.status(404).json({ error: "Account not found in local database." });
+  }
+  currentActivePhone = phone;
+  updateGlobalSessionStateToSelectedActive();
+  res.json({ success: true, currentActivePhone });
+});
+
+app.post("/api/delete-account", (req, res) => {
+  const { phone } = req.body;
+  if (!phone) {
+    return res.status(400).json({ error: "Phone number is required." });
+  }
+  const success = deleteAccountFromDb(phone);
+  res.json({ success });
+});
+
+// Setup Vite and Static Servers
+async function startServer() {
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server starting securely on http://0.0.0.0:${PORT}`);
+
+    // LOCAL DATABASE RECONNECTION HANDLER ON SERVER STARTUP
+    const savedAccounts = getSavedAccountsList();
+    if (savedAccounts.length > 0) {
+      console.log(`[Startup DB] Found ${savedAccounts.length} saved accounts in local database. Restoring...`);
+      currentActivePhone = savedAccounts[0].phone;
+      
+      for (const acc of savedAccounts) {
+        const authDir = path.join(process.cwd(), `whatsapp_auth_session_${acc.phone}`);
+        const credsFile = path.join(authDir, "creds.json");
+        if (fs.existsSync(credsFile)) {
+          console.log(`[Startup DB] Initializing saved WhatsApp key credentials for +${acc.phone}`);
+          initWhatsApp(acc.phone, true);
+        } else {
+          console.log(`[Startup DB] Credentials not found folder for saved account +${acc.phone}. Marking status offline.`);
+          activeSessions.set(acc.phone, {
+            phoneNumber: acc.phone,
+            sock: null,
+            status: "disconnected",
+            pairingCode: "",
+            profile: null,
+            error: null
+          });
+        }
+      }
+      updateGlobalSessionStateToSelectedActive();
+    } else {
+      // BACKWARDS COMPATIBILITY MIGRATION: Auto import legacy raw "whatsapp_auth_session" folder
+      const oldAuthDir = path.join(process.cwd(), "whatsapp_auth_session");
+      const credsFile = path.join(oldAuthDir, "creds.json");
+      if (fs.existsSync(credsFile)) {
+        try {
+          const creds = JSON.parse(fs.readFileSync(credsFile, "utf-8"));
+          const phoneJid = creds.me?.id;
+          if (phoneJid) {
+            const savedPhone = phoneJid.split(":")[0].split("@")[0];
+            console.log(`[Startup Migration] Migrating legacy single session folder for +${savedPhone} to multi-session folder`);
+            const newAuthDir = path.join(process.cwd(), `whatsapp_auth_session_${savedPhone}`);
+            if (!fs.existsSync(newAuthDir)) {
+              fs.renameSync(oldAuthDir, newAuthDir);
+            }
+            saveAccountToDb(savedPhone, creds.me.name || "WhatsApp User");
+            currentActivePhone = savedPhone;
+            initWhatsApp(savedPhone, true);
+            updateGlobalSessionStateToSelectedActive();
+          }
+        } catch (e) {
+          console.error("[Startup Migration] Failed legacy configuration transfer:", e);
+        }
+      }
+    }
+
+    // FIRE TELEGRAM BOT LISTENERS
+    startTelegramBot();
+    // RESTORE SAVED TELEGRAM CLIENT SESSIONS
+    initAllTgSessions().catch(err => console.error("[Startup DB TG] Restoring sessions failed:", err));
+  });
+}
+
+startServer();
