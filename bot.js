@@ -545,11 +545,6 @@ export function getMainMenuKeyboard(chatId) {
         text: "BUY WS AND TG API",
         icon_custom_emoji_id: "5170692113834181832",
         style: "primary"
-      },
-      {
-        text: "MY PACKAGE",
-        icon_custom_emoji_id: "5312361253610475399",
-        style: "primary"
       }
     ],
     [
@@ -583,6 +578,22 @@ export function getMainMenuKeyboard(chatId) {
 }
 
 export const MAIN_MENU_KB = getMainMenuKeyboard();
+
+export const BACK_MENU_KB = {
+  keyboard: [
+    [
+      {
+        text: "BACK",
+        icon_custom_emoji_id: "5267490665117275176",
+        style: "danger"
+      }
+    ]
+  ],
+  resize_keyboard: true
+};
+
+// Track active menu mode per user chatId ("connect_ws" | "check_ws" | "check_tg")
+const userMenuMode = new Map();
 
 // --- ADMIN INLINE KEYBOARDS ---
 export const ADMIN_PANEL_KEYBOARD = {
@@ -1746,10 +1757,61 @@ export async function handleTelegramDocument(chatId, doc) {
   }
 }
 
+async function startWhatsAppPairingForChat(chatId, rawPhoneInput, senderName) {
+  const clean = normalizePhone(rawPhoneInput);
+  if (clean.length < 8) {
+    await sendTelegramMessage(chatId, "⚠️ Invalid phone number format. Example: `8801700000000`", "Markdown", BACK_MENU_KB);
+    return;
+  }
+
+  await sendTelegramMessage(
+    chatId,
+    `⌛ Generating WhatsApp pairing code for *+${clean}*... Please wait 10-15 seconds.`,
+    "Markdown",
+    BACK_MENU_KB
+  );
+
+  linkingOwners.set(clean, { chatId, name: senderName });
+  currentActivePhone = clean;
+
+  await initWhatsApp(clean, false);
+
+  let counter = 0;
+  const maxWait = 20;
+  const checkTimer = setInterval(async () => {
+    counter++;
+    const sess = activeSessions.get(clean);
+
+    if (sess && sess.status === "pairing-code-ready" && sess.pairingCode) {
+      clearInterval(checkTimer);
+      const codeMsg =
+        `🔑 *Your WhatsApp Pairing Code:* \n\n` +
+        `👉 \`${sess.pairingCode}\` 👈\n\n` +
+        `*How to use:*\n` +
+        `1. Open WhatsApp on your phone.\n` +
+        `2. Tap the three-dot menu > *Linked Devices*.\n` +
+        `3. Tap *Link a Device* and select *Link with phone number instead* at the bottom.\n` +
+        `4. Enter the code above.\n\n` +
+        `Your account will sync with the bot automatically! 🚀`;
+      await sendTelegramMessage(chatId, codeMsg, "Markdown", BACK_MENU_KB);
+    } else if (sess && sess.status === "error") {
+      clearInterval(checkTimer);
+      await sendTelegramMessage(chatId, `❌ Failed to generate pairing code: ${sess.error || "Server did not respond"}`);
+    } else if (counter >= maxWait) {
+      clearInterval(checkTimer);
+      await sendTelegramMessage(
+        chatId,
+        `⏳ Code generation is taking a moment. Please check in 30 seconds using \`/status\`.`
+      );
+    }
+  }, 1000);
+}
+
 // Telegram Message Dispatcher
 export async function handleTelegramMessage(message) {
   const chatId = message.chat?.id;
   if (!chatId) return;
+  const chatKey = String(chatId);
 
   const currentUser = trackBotUser(chatId, message.from || message.chat);
 
@@ -1763,66 +1825,78 @@ export async function handleTelegramMessage(message) {
 
   // /start
   if (text.startsWith("/start")) {
+    userMenuMode.delete(chatKey);
     const isAdmin = String(chatId) === ADMIN_CHAT_ID;
     const adminLine = isAdmin ? `🔘 *ADMIN PANEL* - System Administrator Control Panel\n\n` : `\n`;
     const startMsg =
       `👋 *Welcome to Linkify WhatsApp & Telegram Checker Engine!*\n\n` +
       `Directly connect your WhatsApp gateway and check numbers at lightning speed. Use the buttons below:\n\n` +
       `🔘 *CONNECT WS CHECKER* - Get pairing code to link WhatsApp\n` +
-      `🔘 *CHECK WS NUMBER* - Guidelines for checking numbers\n` +
+      `🔘 *CHECK WS NUMBER* - Check WhatsApp numbers\n` +
+      `🔘 *CHECK TG NUMBER* - Check Telegram numbers\n` +
       `🔘 *BUY WS AND TG API* - Purchase API license keys & access\n` +
       `🔘 *HELP* - User guide and all commands\n` +
       `🔘 *MY PROFILE* - Profile details and linked accounts\n` +
-      `🔘 *MY PACKAGE* - Current package limits and active tier\n` +
       adminLine +
-      `📌 *Direct Commands:*\n` +
-      `▫️ \`/login <phone_number>\` - Receive 8-digit pairing code to link WhatsApp (e.g. \`/login 8801700000000\`)\n` +
-      `▫️ \`/check <phone_number>\` - Fast verification for a single number (e.g. \`/check 8801712345678\`)\n` +
-      `▫️ \`/status\` - View live status of connected accounts\n` +
-      `▫️ \`/logout <phone_number>\` - Disconnect and remove an account\n\n` +
-      `💡 *Bulk Checking:* Send multiple numbers in a message or upload a \`.txt\` / \`.csv\` file for instant processing! 🚀`;
+      `💡 *Quick Tip:* Select any option from the menu below and simply send phone numbers like \`88017XXXXXX\` directly without needing any commands! 🚀`;
     await sendTelegramMessage(chatId, startMsg, "Markdown", getMainMenuKeyboard(chatId));
+    return;
+  }
+
+  // BACK BUTTON ACTION
+  if (text === "BACK" || text.toUpperCase() === "BACK") {
+    userMenuMode.delete(chatKey);
+    await sendTelegramMessage(
+      chatId,
+      `🏠 *Main Menu*\n\nSelect an option from the menu buttons below:`,
+      "Markdown",
+      getMainMenuKeyboard(chatId)
+    );
     return;
   }
 
   // --- MENU BUILDER BUTTON ACTIONS ---
   if (text === "CONNECT WS CHECKER" || text.includes("CONNECT WS CHECKER")) {
+    userMenuMode.set(chatKey, "connect_ws");
     const connectMsg = 
       `🔗 *CONNECT WS CHECKER*\n\n` +
-      `To link your WhatsApp account to the bot, run the following command:\n` +
-      `👉 \`/login <phone_number>\`\n\n` +
+      `Send your WhatsApp phone number with country code directly to receive an 8-digit pairing code:\n\n` +
       `*Example:*\n` +
-      `\`/login 8801700000000\`\n\n` +
-      `ℹ️ You will receive an 8-digit pairing code. Open WhatsApp on your phone > *Linked Devices* > *Link with phone number instead* and enter the code.`;
-    await sendTelegramMessage(chatId, connectMsg, "Markdown", getMainMenuKeyboard(chatId));
+      `\`8801700000000\`\n\n` +
+      `ℹ️ You don't need to type any command—just send the number! Once you receive the 8-digit code, open WhatsApp > *Linked Devices* > *Link with phone number instead* and enter the code.\n\n` +
+      `_(Tap *BACK* below to return to the Main Menu)_`;
+    await sendTelegramMessage(chatId, connectMsg, "Markdown", BACK_MENU_KB);
     return;
   }
 
   if (text === "CHECK WS NUMBER" || text.includes("CHECK WS NUMBER")) {
+    userMenuMode.set(chatKey, "check_ws");
     const checkGuideMsg = 
       `🔍 *CHECK WS NUMBER*\n\n` +
-      `Quick ways to check WhatsApp phone numbers:\n\n` +
-      `1️⃣ *Single Number:* Send \`/check <phone_number>\` (e.g. \`/check 8801712345678\`)\n` +
-      `2️⃣ *Quick Check:* Paste one or more numbers directly into the chat\n` +
-      `3️⃣ *Bulk File Check:* Upload a \`.txt\` or \`.csv\` file with numbers\n\n` +
-      `The bot will filter active and inactive WhatsApp accounts instantly! ⚡`;
-    await sendTelegramMessage(chatId, checkGuideMsg, "Markdown", getMainMenuKeyboard(chatId));
+      `Send the phone number(s) with country code directly in the chat to check WhatsApp status:\n\n` +
+      `*Example:*\n` +
+      `\`8801712345678\`\n\n` +
+      `💡 You can send a single number, paste multiple numbers at once, or upload a \`.txt\` / \`.csv\` file!\n\n` +
+      `_(Tap *BACK* below to return to the Main Menu)_`;
+    await sendTelegramMessage(chatId, checkGuideMsg, "Markdown", BACK_MENU_KB);
     return;
   }
 
   if (text === "CHECK TG NUMBER" || text.includes("CHECK TG NUMBER")) {
+    userMenuMode.set(chatKey, "check_tg");
     const checkTgGuideMsg = 
       `🔍 *CHECK TG NUMBER*\n\n` +
-      `Quick ways to check Telegram phone numbers:\n\n` +
-      `1️⃣ *Single Number:* Send the phone number with country code\n` +
-      `2️⃣ *Quick Check:* Paste one or more numbers directly into the chat\n` +
-      `3️⃣ *Bulk File Check:* Upload a \`.txt\` or \`.csv\` file with numbers\n\n` +
-      `The bot will verify active and inactive Telegram accounts at high speed! ⚡`;
-    await sendTelegramMessage(chatId, checkTgGuideMsg, "Markdown", getMainMenuKeyboard(chatId));
+      `Send the phone number(s) with country code directly in the chat to check Telegram status:\n\n` +
+      `*Example:*\n` +
+      `\`8801712345678\`\n\n` +
+      `💡 You can send a single number, paste multiple numbers at once, or upload a \`.txt\` / \`.csv\` file!\n\n` +
+      `_(Tap *BACK* below to return to the Main Menu)_`;
+    await sendTelegramMessage(chatId, checkTgGuideMsg, "Markdown", BACK_MENU_KB);
     return;
   }
 
   if (text === "BUY WS AND TG API" || text.includes("BUY WS AND TG API") || text === "BUY WS API" || text.includes("BUY WS API") || text === "BUY PACKAGE" || text.includes("BUY PACKAGE")) {
+    userMenuMode.delete(chatKey);
     const buyApiMsg = 
       `⚡ *BUY WS AND TG API (WhatsApp & Telegram Checker API)*\n\n` +
       `Integrate high-speed WhatsApp and Telegram checking into your website, CRM, or software:\n\n` +
@@ -1841,16 +1915,15 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "HELP" || text.includes("HELP")) {
+    userMenuMode.delete(chatKey);
     const helpMsg = 
       `📖 *HELP & GUIDELINES*\n\n` +
       `*How to use:*\n` +
-      `▫️ \`CONNECT WS CHECKER\` - Link your WhatsApp account with a pairing code\n` +
-      `▫️ \`CHECK WS NUMBER\` - How to verify and filter phone numbers\n` +
+      `▫️ \`CONNECT WS CHECKER\` - Tap and send your number (e.g. \`8801700000000\`) to get a pairing code\n` +
+      `▫️ \`CHECK WS NUMBER\` - Tap and send phone numbers directly to check WhatsApp\n` +
+      `▫️ \`CHECK TG NUMBER\` - Tap and send phone numbers directly to check Telegram\n` +
       `▫️ \`BUY WS AND TG API\` - API license purchase & documentation\n` +
       `▫️ \`MY PROFILE\` - View your account and gateway info\n` +
-      `▫️ \`MY PACKAGE\` - View current package tier & quotas\n` +
-      `▫️ \`/login <phone_number>\` - Pair a new WhatsApp gateway\n` +
-      `▫️ \`/check <phone_number>\` - Check an individual phone number\n` +
       `▫️ \`/status\` - View connection health and active accounts\n` +
       `▫️ \`/logout <phone_number>\` - Remove an account\n` +
       `▫️ Upload .txt / .csv file - Process bulk number lists`;
@@ -1859,6 +1932,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "MY PROFILE" || text.includes("MY PROFILE")) {
+    userMenuMode.delete(chatKey);
     const accounts = getSavedAccountsList();
     const userFirstName = message.from?.first_name || message.chat?.first_name || "Telegram User";
     const userLastName = message.from?.last_name || "";
@@ -1880,6 +1954,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "MY PACKAGE" || text.includes("MY PACKAGE")) {
+    userMenuMode.delete(chatKey);
     const isPrem = currentUser.isPremium;
     const pkgName = isPrem ? (currentUser.package || "Premium API Tier") : "Free Starter Tier";
     const dailyLimit = isPrem ? "Unlimited checks / day" : "500 checks / day (Unlimited single checks)";
@@ -1903,6 +1978,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "ADMIN PANEL" || text.includes("ADMIN PANEL") || text === "/admin" || text.startsWith("/admin")) {
+    userMenuMode.delete(chatKey);
     if (String(chatId) !== ADMIN_CHAT_ID) {
       await sendTelegramMessage(chatId, `⛔ *Access Denied:* The Admin Panel is exclusively restricted to the designated admin (ID: \`${ADMIN_CHAT_ID}\`).`, "Markdown", getMainMenuKeyboard(chatId));
       return;
@@ -1992,56 +2068,11 @@ export async function handleTelegramMessage(message) {
   if (text.startsWith("/login")) {
     const raw = text.substring(6).trim();
     if (!raw) {
-      await sendTelegramMessage(chatId, "⚠️ Please provide a phone number. Example: `/login 8801700000000`");
+      await sendTelegramMessage(chatId, "⚠️ Please provide a phone number. Example: `8801700000000`");
       return;
     }
-
-    const clean = normalizePhone(raw);
-    if (clean.length < 8) {
-      await sendTelegramMessage(chatId, "⚠️ Invalid phone number format. Example: `/login 8801700000000`");
-      return;
-    }
-
-    await sendTelegramMessage(
-      chatId,
-      `⌛ Generating WhatsApp pairing code for *+${clean}*... Please wait 10-15 seconds.`
-    );
-
     const senderName = message.from?.first_name || message.chat?.first_name || "Telegram User";
-    linkingOwners.set(clean, { chatId, name: senderName });
-    currentActivePhone = clean;
-
-    await initWhatsApp(clean, false);
-
-    let counter = 0;
-    const maxWait = 20;
-    const checkTimer = setInterval(async () => {
-      counter++;
-      const sess = activeSessions.get(clean);
-
-      if (sess && sess.status === "pairing-code-ready" && sess.pairingCode) {
-        clearInterval(checkTimer);
-        const codeMsg =
-          `🔑 *Your WhatsApp Pairing Code:* \n\n` +
-          `👉 \`${sess.pairingCode}\` 👈\n\n` +
-          `*How to use:*\n` +
-          `1. Open WhatsApp on your phone.\n` +
-          `2. Tap the three-dot menu > *Linked Devices*.\n` +
-          `3. Tap *Link a Device* and select *Link with phone number instead* at the bottom.\n` +
-          `4. Enter the code above.\n\n` +
-          `Your account will sync with the bot automatically! 🚀`;
-        await sendTelegramMessage(chatId, codeMsg);
-      } else if (sess && sess.status === "error") {
-        clearInterval(checkTimer);
-        await sendTelegramMessage(chatId, `❌ Failed to generate pairing code: ${sess.error || "Server did not respond"}`);
-      } else if (counter >= maxWait) {
-        clearInterval(checkTimer);
-        await sendTelegramMessage(
-          chatId,
-          `⏳ Code generation is taking a moment. Please check in 30 seconds using \`/status\`.`
-        );
-      }
-    }, 1000);
+    await startWhatsAppPairingForChat(chatId, raw, senderName);
     return;
   }
 
@@ -2049,7 +2080,7 @@ export async function handleTelegramMessage(message) {
   if (text.startsWith("/status")) {
     const saved = getSavedAccountsList();
     if (saved.length === 0) {
-      await sendTelegramMessage(chatId, "ℹ️ No WhatsApp accounts linked yet. To connect an account, type: `/login <phone_number>`.");
+      await sendTelegramMessage(chatId, "ℹ️ No WhatsApp accounts linked yet. Tap *CONNECT WS CHECKER* and send your phone number to connect.");
       return;
     }
 
@@ -2091,22 +2122,50 @@ export async function handleTelegramMessage(message) {
   if (text.startsWith("/check")) {
     const raw = text.substring(6).trim();
     if (!raw) {
-      await sendTelegramMessage(chatId, "⚠️ Please provide a phone number to check. Example: `/check 8801712345678`");
+      await sendTelegramMessage(chatId, "⚠️ Please provide a phone number to check. Example: `8801712345678`");
       return;
     }
     await checkAndRespondBatch(chatId, [raw]);
     return;
   }
 
-  // Raw text with phone numbers
+  // HANDLE DIRECT PHONE NUMBER INPUT BASED ON ACTIVE MENU MODE
+  const activeMode = userMenuMode.get(chatKey);
   const numMatches = text.match(/(\+?[0-9]{8,15})/g);
+
+  if (activeMode === "connect_ws") {
+    if (numMatches && numMatches.length > 0) {
+      const senderName = message.from?.first_name || message.chat?.first_name || "Telegram User";
+      await startWhatsAppPairingForChat(chatId, numMatches[0].trim(), senderName);
+    } else {
+      await sendTelegramMessage(
+        chatId,
+        "⚠️ Please send a valid WhatsApp phone number with country code (e.g. `8801700000000`) or tap *BACK* to return to the Main Menu.",
+        "Markdown",
+        BACK_MENU_KB
+      );
+    }
+    return;
+  }
+
   if (numMatches && numMatches.length > 0) {
     await checkAndRespondBatch(chatId, numMatches);
   } else {
-    await sendTelegramMessage(
-      chatId,
-      "ℹ️ Please send phone numbers to check or type `/start` to view the menu and command list."
-    );
+    if (activeMode === "check_ws" || activeMode === "check_tg") {
+      await sendTelegramMessage(
+        chatId,
+        "⚠️ Please send valid phone number(s) with country code (e.g. `8801712345678`) or tap *BACK* to return to the Main Menu.",
+        "Markdown",
+        BACK_MENU_KB
+      );
+    } else {
+      await sendTelegramMessage(
+        chatId,
+        "ℹ️ Please select an option from the menu or send phone numbers (e.g. `8801712345678`) to check.",
+        "Markdown",
+        getMainMenuKeyboard(chatId)
+      );
+    }
   }
 }
 
