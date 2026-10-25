@@ -30,8 +30,26 @@ export const TG_API_HASH = process.env.TELEGRAM_API_HASH || "b18441a1fff1153b543
 export const activeTgSessions = new Map();
 export const adminTgWizard = new Map();
 
+export const DEFAULT_TG_ACCOUNTS = [
+  {
+    phone: "923360688180",
+    name: "Sam",
+    username: "",
+    session: "1BAAOMTQ5LjE1NC4xNjcuOTEAUA0XUuC0sR9QcKSD/nr4DbQNRgshev/WIvgzLy45i8UeoqHql35yU9dpkZS65HimmE37Mm6yJXv2XfiZwZarWMeDihIbMXJih7XMSMP5phRsCw8g+N03CP6mlgPzFlBORhFu/SzhvsJiZ82RkE/jw++78XJRIw73iE2caEH6v1ErgG0qcz79SQkcBPZLRkFzmaFOORvlJdQvbkn5fpK+Lywve+M+2oe6vmTHUpMnI6za9n/wqBI8A0jhjZ5+RrRKmzMKp2uzI3SjakJJ2XDWVDa2huS1tJPA5OZiazFWAo6Z4j/Rurab6FWg9yIdu4hEGYJnWrl9UQqYh3TDIl0tf34=",
+    apiId: 31763326,
+    apiHash: "21b699c4de6dfe44a29b6456ee456eb4",
+    linkedAt: "2026-10-25T08:19:34.507Z",
+    status: "connected"
+  }
+];
+
 export function getSavedTgAccountsList() {
-  if (!fs.existsSync(TG_DB_FILE)) return [];
+  if (!fs.existsSync(TG_DB_FILE)) {
+    try {
+      fs.writeFileSync(TG_DB_FILE, JSON.stringify(DEFAULT_TG_ACCOUNTS, null, 2), "utf-8");
+    } catch {}
+    return [...DEFAULT_TG_ACCOUNTS];
+  }
   try {
     return JSON.parse(fs.readFileSync(TG_DB_FILE, "utf-8"));
   } catch {
@@ -350,7 +368,7 @@ export function applyPremiumEmojis(rawText) {
 export function formatTelegramHtml(text) {
   if (!text) return "";
   const savedTags = [];
-  let result = text.replace(/<(\/?[a-zA-Z0-9_-]+)(?:\s+[^>]*)?>/g, (tag) => {
+  let result = text.replace(/<(\/?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|tg-emoji|tg-spoiler|blockquote))(?:\s+[^>]*)?>/gi, (tag) => {
     savedTags.push(tag);
     return `__HTML_TAG_${savedTags.length - 1}__`;
   });
@@ -414,15 +432,88 @@ export function normalizePhone(raw) {
   return clean;
 }
 
+export function extractPhoneNumbers(rawText) {
+  if (!rawText) return [];
+  const results = [];
+  const seen = new Set();
+
+  const addCandidate = (raw) => {
+    const digitsOnly = String(raw).replace(/\D/g, "");
+    if (digitsOnly.length < 8 || digitsOnly.length > 15) return;
+    const clean = normalizePhone(digitsOnly);
+    if (clean && clean.length >= 8 && clean.length <= 15 && !seen.has(clean)) {
+      seen.add(clean);
+      results.push(clean);
+    }
+  };
+
+  const formattedMatches = String(rawText).match(/(?:\+?\d[\d\s\-().]{6,18}\d)/g);
+  if (formattedMatches) {
+    for (const m of formattedMatches) {
+      addCandidate(m);
+    }
+  }
+
+  const contiguousMatches = String(rawText).match(/(\+?[0-9]{8,15})/g);
+  if (contiguousMatches) {
+    for (const m of contiguousMatches) {
+      addCandidate(m);
+    }
+  }
+
+  return results;
+}
+
 // --- LOCAL DATABASE HELPERS ---
 export function getSavedAccountsList() {
-  if (!fs.existsSync(DB_FILE)) return [];
-  try {
-    const data = fs.readFileSync(DB_FILE, "utf-8");
-    return JSON.parse(data);
-  } catch (e) {
-    return [];
+  let accounts = [];
+  if (fs.existsSync(DB_FILE)) {
+    try {
+      const data = fs.readFileSync(DB_FILE, "utf-8");
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        accounts = parsed;
+      }
+    } catch (e) {}
   }
+
+  // Auto-discover any authenticated whatsapp_auth_session_<phone> folders on disk
+  try {
+    const dirs = fs.readdirSync(process.cwd());
+    let updated = false;
+    for (const d of dirs) {
+      const match = d.match(/^whatsapp_auth_session_(\d+)$/);
+      if (match && match[1]) {
+        const phone = match[1];
+        const credsPath = path.join(process.cwd(), d, "creds.json");
+        if (fs.existsSync(credsPath)) {
+          try {
+            const creds = JSON.parse(fs.readFileSync(credsPath, "utf-8"));
+            const isRegistered = Boolean(creds?.registered || creds?.account || creds?.me?.id);
+            if (isRegistered && !accounts.some((a) => a.phone === phone)) {
+              const discoveredName = creds?.me?.name || "WhatsApp User";
+              accounts.push({
+                phone,
+                name: discoveredName,
+                linkedAt: new Date().toISOString(),
+                addedByChatId: 8343010638,
+                addedByName: discoveredName,
+              });
+              updated = true;
+              console.log(`[DB Auto-Discovery] Restored authenticated WhatsApp session +${phone} (${discoveredName}) from disk.`);
+            }
+          } catch {}
+        }
+      }
+    }
+    if (updated) {
+      fs.writeFileSync(DB_FILE, JSON.stringify(accounts, null, 2), "utf-8");
+    }
+  } catch (e) {
+    console.error("[DB Auto-Discovery] Failed scanning session directories:", e);
+  }
+
+  return accounts;
 }
 
 export function saveAccountToDb(phone, name, addedByChatId, addedByName) {
@@ -695,6 +786,35 @@ export const BACK_MENU_KB = {
 // Track active menu mode per user chatId ("connect_ws" | "check_ws" | "check_tg")
 const userMenuMode = new Map();
 
+export function getUserMenuMode(chatId) {
+  const key = String(chatId);
+  if (userMenuMode.has(key)) {
+    return userMenuMode.get(key);
+  }
+  const users = getBotUsersList();
+  const u = users.find((item) => String(item.chatId) === key);
+  if (u?.menuMode) {
+    userMenuMode.set(key, u.menuMode);
+    return u.menuMode;
+  }
+  return undefined;
+}
+
+export function setUserMenuMode(chatId, mode) {
+  const key = String(chatId);
+  if (mode) {
+    userMenuMode.set(key, mode);
+  } else {
+    userMenuMode.delete(key);
+  }
+  const users = getBotUsersList();
+  const idx = users.findIndex((item) => String(item.chatId) === key);
+  if (idx > -1) {
+    users[idx].menuMode = mode;
+    saveBotUsersList(users);
+  }
+}
+
 // --- ADMIN INLINE KEYBOARDS ---
 export const ADMIN_PANEL_KEYBOARD = {
   inline_keyboard: [
@@ -894,7 +1014,8 @@ export function getTgCheckerDashboardText() {
       const uname = acc.username ? ` (@${acc.username.replace(/^@/, "")})` : "";
       text += `${idx + 1}. <b>+${acc.phone}</b> — ${acc.name || "User"}${uname}\n   ▫️ API ID: <code>${acc.apiId || TG_API_ID}</code> | ${statusBadge}\n`;
     });
-    text += `\n👇 <i>Click on any phone number button below to manage its API ID, API Hash, or Delete Session:</i>`;
+    text += `\n💡 <b>Quick Check Active:</b> Send any phone number (e.g. <code>8801712345678</code>) or upload a <code>.txt</code>/<code>.csv</code> file right now in chat to check if a Telegram account is open!\n`;
+    text += `\n👇 <i>Or click on any phone number button below to manage its API ID, API Hash, or Delete Session:</i>`;
   }
 
   return text;
@@ -920,7 +1041,7 @@ export function getTgAccountDetailText(phone) {
     `▫️ <b>API Hash:</b> <code>${useApiHash}</code>\n` +
     `▫️ <b>Session Status:</b> ${isOnline ? "🟢 Connected & Ready" : "🟡 Saved (Auto-Reconnect)"}\n` +
     `▫️ <b>Linked At:</b> <code>${new Date(acc.linkedAt).toLocaleString()}</code>\n\n` +
-    `👇 Select an action below:`
+    `💡 <b>Ready to Check:</b> Send any phone number(s) in chat to check Telegram status using this gateway, or select an option below:`
   );
 }
 
@@ -1471,6 +1592,7 @@ export async function handleTelegramCallbackQuery(call) {
       try { existingWiz.client.disconnect(); } catch {}
     }
     adminTgWizard.delete(String(chatId));
+    setUserMenuMode(chatId, "check_tg");
     const text = getTgCheckerDashboardText();
     const kb = getTgCheckerMenuKeyboard();
     if (msgId) {
@@ -1512,6 +1634,7 @@ export async function handleTelegramCallbackQuery(call) {
   if (data.startsWith("tg_acc_view_")) {
     const phone = data.replace("tg_acc_view_", "").trim();
     adminTgWizard.delete(String(chatId));
+    setUserMenuMode(chatId, "check_tg");
     const text = getTgAccountDetailText(phone);
     const kb = getTgAccountDetailKeyboard(phone);
     if (msgId) {
@@ -1651,9 +1774,13 @@ export async function handleTelegramCallbackQuery(call) {
 export async function sendTelegramMessage(chatId, text, parseMode = "HTML", replyMarkup = null) {
   try {
     const formattedText = formatTelegramHtml(text);
-    const finalMarkup = (!replyMarkup || replyMarkup === MAIN_MENU_KB)
-      ? getMainMenuKeyboard(chatId)
-      : replyMarkup;
+    const activeMode = getUserMenuMode(chatId);
+    const defaultMarkup = activeMode ? BACK_MENU_KB : getMainMenuKeyboard(chatId);
+    const finalMarkup = replyMarkup === false
+      ? null
+      : ((!replyMarkup || replyMarkup === MAIN_MENU_KB)
+        ? (replyMarkup === MAIN_MENU_KB ? getMainMenuKeyboard(chatId) : defaultMarkup)
+        : replyMarkup);
 
     const payload = {
       chat_id: chatId,
@@ -1819,7 +1946,17 @@ export async function initWhatsApp(phoneNumber, isReconnect = false) {
     const sessRef = activeSessions.get(phoneNumber);
     if (sessRef) sessRef.sock = sock;
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", async () => {
+      await saveCreds();
+      try {
+        const creds = sock.authState?.creds;
+        if (creds && (creds.registered || creds.account || creds.me?.id)) {
+          const owner = linkingOwners.get(phoneNumber);
+          const profileName = sock.user?.name || creds.me?.name || "WhatsApp User";
+          saveAccountToDb(phoneNumber, profileName, owner?.chatId, owner?.name);
+        }
+      } catch {}
+    });
 
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect } = update;
@@ -1902,7 +2039,7 @@ export async function initWhatsApp(phoneNumber, isReconnect = false) {
   }
 }
 
-// Check single number on WhatsApp
+// Check single number on WhatsApp using Web App's JID system
 export async function checkWhatsAppNumber(phoneToCheck, gatewayPhone = null) {
   let resolvedSock = null;
 
@@ -1930,54 +2067,55 @@ export async function checkWhatsAppNumber(phoneToCheck, gatewayPhone = null) {
   }
 
   const clean = normalizePhone(phoneToCheck);
+  const jid = `${clean}@s.whatsapp.net`;
   try {
-    const [result] = await resolvedSock.onWhatsApp(clean);
+    const result = await resolvedSock.onWhatsApp(jid);
+    const exists = Boolean(result && result.length > 0 && result[0].exists);
     return {
       phone: clean,
-      exists: Boolean(result?.exists),
-      jid: result?.jid || null,
+      exists,
+      jid: exists ? (result[0].jid || jid) : null,
     };
   } catch (err) {
-    console.error(`[Check Error] ${clean}:`, err.message || err);
+    console.error(`[Check Error] ${jid}:`, err.message || err);
     return { phone: clean, exists: false, jid: null };
   }
 }
 
-// Bulk check batch handler with Telegram progress & reports
+// Bulk check batch handler using Web App's JID chunking system
 export async function checkAndRespondBatch(chatId, rawNumbers) {
-  // Find connected WhatsApp socket for this chat or active gateway
+  let resolvedSession = null;
   const saved = getSavedAccountsList();
   const myAccounts = saved.filter((acc) => acc.addedByChatId === chatId);
 
-  let gatewayPhone = null;
   for (const acc of myAccounts) {
     const s = activeSessions.get(acc.phone);
     if (s && s.status === "connected" && s.sock) {
-      gatewayPhone = acc.phone;
+      resolvedSession = s;
       break;
     }
   }
 
-  if (!gatewayPhone && currentActivePhone) {
+  if (!resolvedSession && currentActivePhone) {
     const s = activeSessions.get(currentActivePhone);
-    if (s && s.status === "connected" && s.sock) gatewayPhone = currentActivePhone;
+    if (s && s.status === "connected" && s.sock) resolvedSession = s;
   }
 
-  if (!gatewayPhone) {
-    for (const [ph, s] of activeSessions) {
+  if (!resolvedSession) {
+    for (const [, s] of activeSessions) {
       if (s.status === "connected" && s.sock) {
-        gatewayPhone = ph;
+        resolvedSession = s;
         break;
       }
     }
   }
 
-  if (!gatewayPhone) {
+  if (!resolvedSession) {
     await sendTelegramMessage(
       chatId,
       "⚠️ *No active WhatsApp gateway connected!* \n\n" +
-        "Please connect your WhatsApp to the bot first using: `/login <phone_number>`\n" +
-        "Example: `/login 8801700000000`"
+        "Please connect your WhatsApp to the bot first by tapping *CONNECT WS CHECKER* or using:\n" +
+        "`/login 8801700000000`"
     );
     return;
   }
@@ -2001,50 +2139,120 @@ export async function checkAndRespondBatch(chatId, rawNumbers) {
     chatId,
     `🔍 *Checking WhatsApp Database...*\n\n` +
       `Total Unique Numbers: *${normalizedList.length}*\n` +
-      `Active Gateway: *+${gatewayPhone}*`
+      `Active Gateway: *+${resolvedSession.phoneNumber}*`,
+    "HTML",
+    false
   );
 
-  const activeWa = [];
-  const inactiveWa = [];
+  const activeWA = [];
+  const inactiveWA = [];
+  const chunkSize = 50;
 
-  for (let i = 0; i < normalizedList.length; i++) {
-    const num = normalizedList[i];
-    try {
-      const res = await checkWhatsAppNumber(num, gatewayPhone);
-      if (res.exists) {
-        activeWa.push(num);
-      } else {
-        inactiveWa.push(num);
+  for (let i = 0; i < normalizedList.length; i += chunkSize) {
+    const chunk = normalizedList.slice(i, i + chunkSize);
+    const jidsToQuery = chunk.map((num) => `${num}@s.whatsapp.net`);
+    const jidToNumMap = new Map();
+    chunk.forEach((num) => jidToNumMap.set(`${num}@s.whatsapp.net`, num));
+
+    const chunkExists = new Set();
+    let retryCount = 0;
+    let querySuccess = false;
+
+    while (retryCount < 2 && !querySuccess) {
+      try {
+        if (resolvedSession && resolvedSession.sock) {
+          const result = await resolvedSession.sock.onWhatsApp(...jidsToQuery);
+          if (result && Array.isArray(result)) {
+            for (const item of result) {
+              if (item.exists) {
+                chunkExists.add(item.jid);
+                const cleanReturned = normalizePhone(String(item.jid || "").split(":")[0].split("@")[0]);
+                if (cleanReturned) {
+                  chunkExists.add(`${cleanReturned}@s.whatsapp.net`);
+                }
+              }
+            }
+          }
+          querySuccess = true;
+        } else {
+          break;
+        }
+      } catch (e) {
+        retryCount++;
+        if (retryCount >= 2) {
+          for (const jid of jidsToQuery) {
+            try {
+              if (resolvedSession && resolvedSession.sock) {
+                const result = await resolvedSession.sock.onWhatsApp(jid);
+                if (result && Array.isArray(result) && result[0]?.exists) {
+                  chunkExists.add(jid);
+                }
+              }
+              await new Promise((r) => setTimeout(r, 80));
+            } catch {}
+          }
+          querySuccess = true;
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
       }
-    } catch (e) {
-      inactiveWa.push(num);
     }
 
-    // Update progress in telegram every 5 numbers or when finished
-    if (normalizedList.length > 5 && (i % 5 === 0 || i === normalizedList.length - 1)) {
-      const pct = Math.round(((i + 1) / normalizedList.length) * 100);
-      if (progressMsgId) {
-        await editTelegramMessage(
-          chatId,
-          progressMsgId,
-          `🔍 *Checking WhatsApp Database...*\n\n` +
-            `⏳ Progress: *${i + 1}/${normalizedList.length}* (${pct}%)\n` +
-            `🟢 Active: *${activeWa.length}* | 🔴 Inactive: *${inactiveWa.length}*`
-        );
+    for (const jid of jidsToQuery) {
+      const num = jidToNumMap.get(jid);
+      if (num) {
+        if (chunkExists.has(jid)) {
+          activeWA.push(num);
+        } else {
+          inactiveWA.push(num);
+        }
       }
+    }
+
+    if (normalizedList.length > 50 && progressMsgId) {
+      const pct = Math.round((Math.min(i + chunkSize, normalizedList.length) / normalizedList.length) * 100);
+      await editTelegramMessage(
+        chatId,
+        progressMsgId,
+        `🔍 *Checking WhatsApp Database...*\n\n` +
+          `⏳ Progress: *${Math.min(i + chunkSize, normalizedList.length)}/${normalizedList.length}* (${pct}%)\n` +
+          `🟢 Active: *${activeWA.length}* | 🔴 Inactive: *${inactiveWA.length}*`
+      );
+    }
+
+    if (i + chunkSize < normalizedList.length) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
     }
   }
 
-  // Small batch: send full list in message
-  if (normalizedList.length <= 30) {
-    const activeText = activeWa.length > 0 ? activeWa.map((x) => `+${x}`).join("\n") : "_None_";
-    const inactiveText = inactiveWa.length > 0 ? inactiveWa.map((x) => `+${x}`).join("\n") : "_None_";
+  if (normalizedList.length === 1) {
+    const num = normalizedList[0];
+    const isExists = activeWA.includes(num);
+    const singleReport = isExists
+      ? `✅ <b>WhatsApp Account Found!</b>\n\n` +
+        `📱 <b>Phone Number:</b> <code>+${num}</code>\n` +
+        `🟢 <b>Status:</b> Active on WhatsApp\n` +
+        `🔗 <b>WhatsApp JID:</b> <code>${num}@s.whatsapp.net</code>\n` +
+        `🌐 <b>Checked Via:</b> <code>+${resolvedSession.phoneNumber}</code>`
+      : `❌ <b>No WhatsApp Account Found!</b>\n\n` +
+        `📱 <b>Phone Number:</b> <code>+${num}</code>\n` +
+        `🔴 <b>Status:</b> Not Registered on WhatsApp\n` +
+        `🌐 <b>Checked Via:</b> <code>+${resolvedSession.phoneNumber}</code>`;
+
+    if (progressMsgId) {
+      await editTelegramMessage(chatId, progressMsgId, singleReport, "HTML");
+    } else {
+      await sendTelegramMessage(chatId, singleReport, "HTML");
+    }
+  } else if (normalizedList.length <= 30) {
+    const activeText = activeWA.length > 0 ? activeWA.map((x) => `+${x}`).join("\n") : "_None_";
+    const inactiveText = inactiveWA.length > 0 ? inactiveWA.map((x) => `+${x}`).join("\n") : "_None_";
 
     const report =
       `🤖 *WhatsApp Checker Report*\n\n` +
       `📊 *Total Checked:* ${normalizedList.length}\n` +
-      `✅ *Active WhatsApp Accounts (${activeWa.length}):*\n${activeText}\n\n` +
-      `❌ *Not on WhatsApp (${inactiveWa.length}):*\n${inactiveText}`;
+      `✅ *Active WhatsApp Accounts (${activeWA.length}):*\n${activeText}\n\n` +
+      `❌ *Not on WhatsApp (${inactiveWA.length}):*\n${inactiveText}`;
 
     if (progressMsgId) {
       await editTelegramMessage(chatId, progressMsgId, report);
@@ -2052,13 +2260,15 @@ export async function checkAndRespondBatch(chatId, rawNumbers) {
       await sendTelegramMessage(chatId, report);
     }
   } else {
-    // Large batch: send summary message + downloadable txt document
+    const activeText = activeWA.map((x) => `+${x}`).join("\n");
+    const inactiveText = inactiveWA.map((x) => `+${x}`).join("\n");
+
     const summary =
       `🤖 *Bulk WhatsApp Checker Report*\n\n` +
       `📊 *Total Checked:* ${normalizedList.length}\n` +
-      `🟢 *Active WhatsApp Accounts:* *${activeWa.length}*\n` +
-      `🔴 *Not on WhatsApp:* *${inactiveWa.length}*\n\n` +
-      `📁 Detailed results are attached in the file below:`;
+      `🟢 *Active WhatsApp Accounts:* *${activeWA.length}*\n` +
+      `🔴 *Not on WhatsApp:* *${inactiveWA.length}*\n\n` +
+      `📂 Detailed lists are attached in the text files below.`;
 
     if (progressMsgId) {
       await editTelegramMessage(chatId, progressMsgId, summary);
@@ -2066,28 +2276,36 @@ export async function checkAndRespondBatch(chatId, rawNumbers) {
       await sendTelegramMessage(chatId, summary);
     }
 
-    const fileContent =
-      `==== ACTIVE WHATSAPP NUMBERS (${activeWa.length}) ====\n` +
-      activeWa.map((x) => `+${x}`).join("\n") +
-      `\n\n==== INACTIVE NUMBERS (${inactiveWa.length}) ====\n` +
-      inactiveWa.map((x) => `+${x}`).join("\n");
-
-    const timeStr = new Date().toISOString().replace(/[:.]/g, "-");
-    await sendTelegramDocument(
-      chatId,
-      fileContent,
-      `whatsapp_checked_${timeStr}.txt`,
-      `Active: ${activeWa.length} | Inactive: ${inactiveWa.length}`
-    );
+    if (activeWA.length > 0) {
+      await sendTelegramDocument(
+        chatId,
+        activeText,
+        "active_whatsapp_numbers.txt",
+        `🟢 Active WhatsApp Numbers (${activeWA.length})`
+      );
+    }
+    if (inactiveWA.length > 0) {
+      await sendTelegramDocument(
+        chatId,
+        inactiveText,
+        "inactive_whatsapp_numbers.txt",
+        `🔴 Inactive Numbers (${inactiveWA.length})`
+      );
+    }
   }
 }
 
 // Document file handler (.txt/.csv)
-export async function handleTelegramDocument(chatId, doc) {
+export async function handleTelegramDocument(chatId, doc, captionText = "") {
   const fileId = doc.file_id;
   const fileName = doc.file_name || "numbers.txt";
+  const isTgMode = getUserMenuMode(chatId) === "check_tg" || String(captionText).toLowerCase().includes("tg");
 
-  await sendTelegramMessage(chatId, `⏳ Processing *${fileName}*... Extracting phone numbers.`);
+  await sendTelegramMessage(
+    chatId,
+    `⏳ Processing <b>${fileName}</b>... Extracting phone numbers for ${isTgMode ? "Telegram" : "WhatsApp"} check.`,
+    "HTML"
+  );
 
   try {
     const fileInfoRes = await fetch(`${TG_API_URL}/getFile?file_id=${fileId}`);
@@ -2101,13 +2319,13 @@ export async function handleTelegramDocument(chatId, doc) {
     if (!dlRes.ok) throw new Error("Failed downloading file from Telegram");
 
     const fileText = await dlRes.text();
-    const matches = fileText.match(/(\+?[0-9]{8,15})/g);
+    const extracted = extractPhoneNumbers(fileText);
 
-    if (matches && matches.length > 0) {
-      if (userMenuMode.get(String(chatId)) === "check_tg") {
-        await checkAndRespondTgBatch(chatId, matches);
+    if (extracted.length > 0) {
+      if (isTgMode) {
+        await checkAndRespondTgBatch(chatId, extracted, true);
       } else {
-        await checkAndRespondBatch(chatId, matches);
+        await checkAndRespondBatch(chatId, extracted);
       }
     } else {
       await sendTelegramMessage(chatId, "⚠️ No valid 8 to 15-digit mobile numbers found in this file. Please upload a valid .txt or .csv file.");
@@ -2125,17 +2343,21 @@ async function startWhatsAppPairingForChat(chatId, rawPhoneInput, senderName) {
     return;
   }
 
-  await sendTelegramMessage(
+  const processingMsgId = await sendTelegramMessage(
     chatId,
-    `⌛ Generating WhatsApp pairing code for *+${clean}*... Please wait 10-15 seconds.`,
-    "Markdown",
-    BACK_MENU_KB
+    `<tg-emoji emoji-id="5337172996211648018">⏳</tg-emoji> 𝙿𝚛𝚘𝚌𝚌𝚎𝚜𝚜𝚒𝚗𝚐 𝚢𝚘𝚞𝚛 𝚛𝚎𝚚𝚞𝚎𝚜𝚝`,
+    "HTML",
+    false
   );
 
   linkingOwners.set(clean, { chatId, name: senderName });
   currentActivePhone = clean;
 
   await initWhatsApp(clean, false);
+
+  const maskedPhone = clean.length > 7
+    ? `${clean.slice(0, 3)}****${clean.slice(-4)}`
+    : clean;
 
   let counter = 0;
   const maxWait = 20;
@@ -2146,24 +2368,30 @@ async function startWhatsAppPairingForChat(chatId, rawPhoneInput, senderName) {
     if (sess && sess.status === "pairing-code-ready" && sess.pairingCode) {
       clearInterval(checkTimer);
       const codeMsg =
-        `🔑 *Your WhatsApp Pairing Code:* \n\n` +
-        `👉 \`${sess.pairingCode}\` 👈\n\n` +
-        `*How to use:*\n` +
-        `1. Open WhatsApp on your phone.\n` +
-        `2. Tap the three-dot menu > *Linked Devices*.\n` +
-        `3. Tap *Link a Device* and select *Link with phone number instead* at the bottom.\n` +
-        `4. Enter the code above.\n\n` +
-        `Your account will sync with the bot automatically! 🚀`;
-      await sendTelegramMessage(chatId, codeMsg, "Markdown", BACK_MENU_KB);
+        `✅ Device Pairing Code Sent Successfully!\n\n` +
+        `📞 Number : ${maskedPhone}\n\n` +
+        `💬 Pairing Code : <code>${sess.pairingCode}</code>`;
+      if (processingMsgId) {
+        await editTelegramMessage(chatId, processingMsgId, codeMsg, "HTML");
+      } else {
+        await sendTelegramMessage(chatId, codeMsg, "HTML", BACK_MENU_KB);
+      }
     } else if (sess && sess.status === "error") {
       clearInterval(checkTimer);
-      await sendTelegramMessage(chatId, `❌ Failed to generate pairing code: ${sess.error || "Server did not respond"}`);
+      const errMsg = `❌ Failed to generate pairing code: ${sess.error || "Server did not respond"}`;
+      if (processingMsgId) {
+        await editTelegramMessage(chatId, processingMsgId, errMsg, "HTML");
+      } else {
+        await sendTelegramMessage(chatId, errMsg, "HTML", BACK_MENU_KB);
+      }
     } else if (counter >= maxWait) {
       clearInterval(checkTimer);
-      await sendTelegramMessage(
-        chatId,
-        `⏳ Code generation is taking a moment. Please check in 30 seconds using \`/status\`.`
-      );
+      const timeoutMsg = `⏳ Code generation is taking a moment. Please check in 30 seconds using <code>/status</code>.`;
+      if (processingMsgId) {
+        await editTelegramMessage(chatId, processingMsgId, timeoutMsg, "HTML");
+      } else {
+        await sendTelegramMessage(chatId, timeoutMsg, "HTML", BACK_MENU_KB);
+      }
     }
   }, 1000);
 }
@@ -2177,7 +2405,7 @@ export async function handleTelegramMessage(message) {
   const currentUser = trackBotUser(chatId, message.from || message.chat);
 
   if (message.document) {
-    await handleTelegramDocument(chatId, message.document);
+    await handleTelegramDocument(chatId, message.document, message.caption || "");
     return;
   }
 
@@ -2186,7 +2414,7 @@ export async function handleTelegramMessage(message) {
 
   // /start
   if (text.startsWith("/start")) {
-    userMenuMode.delete(chatKey);
+    setUserMenuMode(chatId, null);
     const isAdmin = String(chatId) === ADMIN_CHAT_ID;
     const adminLine = isAdmin ? `🔘 *ADMIN PANEL* - System Administrator Control Panel\n\n` : `\n`;
     const startMsg =
@@ -2206,7 +2434,7 @@ export async function handleTelegramMessage(message) {
 
   // BACK BUTTON ACTION
   if (text === "BACK" || text.toUpperCase() === "BACK") {
-    userMenuMode.delete(chatKey);
+    setUserMenuMode(chatId, null);
     await sendTelegramMessage(
       chatId,
       `🏠 *Main Menu*\n\nSelect an option from the menu buttons below:`,
@@ -2218,7 +2446,7 @@ export async function handleTelegramMessage(message) {
 
   // --- MENU BUILDER BUTTON ACTIONS ---
   if (text === "CONNECT WS CHECKER" || text.includes("CONNECT WS CHECKER")) {
-    userMenuMode.set(chatKey, "connect_ws");
+    setUserMenuMode(chatId, "connect_ws");
     const connectMsg = 
       `🔗 *CONNECT WS CHECKER*\n\n` +
       `Send your WhatsApp phone number with country code directly to receive an 8-digit pairing code:\n\n` +
@@ -2231,7 +2459,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "CHECK WS NUMBER" || text.includes("CHECK WS NUMBER")) {
-    userMenuMode.set(chatKey, "check_ws");
+    setUserMenuMode(chatId, "check_ws");
     const checkGuideMsg = 
       `🔍 *CHECK WS NUMBER*\n\n` +
       `Send the phone number(s) with country code directly in the chat to check WhatsApp status:\n\n` +
@@ -2244,7 +2472,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "CHECK TG NUMBER" || text.includes("CHECK TG NUMBER")) {
-    userMenuMode.set(chatKey, "check_tg");
+    setUserMenuMode(chatId, "check_tg");
     const checkTgGuideMsg = 
       `🔍 *CHECK TG NUMBER*\n\n` +
       `Send the phone number(s) with country code directly in the chat to check Telegram status:\n\n` +
@@ -2257,7 +2485,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "BUY WS AND TG API" || text.includes("BUY WS AND TG API") || text === "BUY WS API" || text.includes("BUY WS API") || text === "BUY PACKAGE" || text.includes("BUY PACKAGE")) {
-    userMenuMode.delete(chatKey);
+    setUserMenuMode(chatId, null);
     const buyApiMsg = 
       `⚡ *BUY WS AND TG API (WhatsApp & Telegram Checker API)*\n\n` +
       `Integrate high-speed WhatsApp and Telegram checking into your website, CRM, or software:\n\n` +
@@ -2276,7 +2504,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "HELP" || text.includes("HELP")) {
-    userMenuMode.delete(chatKey);
+    setUserMenuMode(chatId, null);
     const helpMsg = 
       `📖 *HELP & GUIDELINES*\n\n` +
       `*How to use:*\n` +
@@ -2293,7 +2521,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "MY PROFILE" || text.includes("MY PROFILE")) {
-    userMenuMode.delete(chatKey);
+    setUserMenuMode(chatId, null);
     const accounts = getSavedAccountsList();
     const userFirstName = message.from?.first_name || message.chat?.first_name || "Telegram User";
     const userLastName = message.from?.last_name || "";
@@ -2315,7 +2543,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "MY PACKAGE" || text.includes("MY PACKAGE")) {
-    userMenuMode.delete(chatKey);
+    setUserMenuMode(chatId, null);
     const isPrem = currentUser.isPremium;
     const pkgName = isPrem ? (currentUser.package || "Premium API Tier") : "Free Starter Tier";
     const dailyLimit = isPrem ? "Unlimited checks / day" : "500 checks / day (Unlimited single checks)";
@@ -2339,7 +2567,7 @@ export async function handleTelegramMessage(message) {
   }
 
   if (text === "ADMIN PANEL" || text.includes("ADMIN PANEL") || text === "/admin" || text.startsWith("/admin")) {
-    userMenuMode.delete(chatKey);
+    setUserMenuMode(chatId, null);
     if (String(chatId) !== ADMIN_CHAT_ID) {
       await sendTelegramMessage(chatId, `⛔ *Access Denied:* The Admin Panel is exclusively restricted to the designated admin (ID: \`${ADMIN_CHAT_ID}\`).`, "Markdown", getMainMenuKeyboard(chatId));
       return;
@@ -2479,14 +2707,27 @@ export async function handleTelegramMessage(message) {
     return;
   }
 
+  // /checktg <phone>
+  if (text.startsWith("/checktg")) {
+    const raw = text.substring(8).trim();
+    const extracted = extractPhoneNumbers(raw);
+    if (extracted.length === 0) {
+      await sendTelegramMessage(chatId, "⚠️ Please provide a phone number to check on Telegram. Example: `/checktg 8801712345678`");
+      return;
+    }
+    await checkAndRespondTgBatch(chatId, extracted, false);
+    return;
+  }
+
   // /check <phone>
   if (text.startsWith("/check")) {
     const raw = text.substring(6).trim();
-    if (!raw) {
+    const extracted = extractPhoneNumbers(raw);
+    if (extracted.length === 0) {
       await sendTelegramMessage(chatId, "⚠️ Please provide a phone number to check. Example: `8801712345678`");
       return;
     }
-    await checkAndRespondBatch(chatId, [raw]);
+    await checkAndRespondBatch(chatId, extracted);
     return;
   }
 
@@ -2652,6 +2893,7 @@ export async function handleTelegramMessage(message) {
         );
         activeTgSessions.set(wiz.phone, { client: wiz.client, status: "connected" });
         adminTgWizard.delete(chatKey);
+        setUserMenuMode(chatId, "check_tg");
 
         await sendTelegramMessage(
           chatId,
@@ -2710,6 +2952,7 @@ export async function handleTelegramMessage(message) {
         );
         activeTgSessions.set(wiz.phone, { client: wiz.client, status: "connected" });
         adminTgWizard.delete(chatKey);
+        setUserMenuMode(chatId, "check_tg");
 
         await sendTelegramMessage(
           chatId,
@@ -2735,13 +2978,13 @@ export async function handleTelegramMessage(message) {
   }
 
   // HANDLE DIRECT PHONE NUMBER INPUT BASED ON ACTIVE MENU MODE
-  const activeMode = userMenuMode.get(chatKey);
-  const numMatches = text.match(/(\+?[0-9]{8,15})/g);
+  const activeMode = getUserMenuMode(chatId);
+  const extractedNumbers = extractPhoneNumbers(text);
 
   if (activeMode === "connect_ws") {
-    if (numMatches && numMatches.length > 0) {
+    if (extractedNumbers.length > 0) {
       const senderName = message.from?.first_name || message.chat?.first_name || "Telegram User";
-      await startWhatsAppPairingForChat(chatId, numMatches[0].trim(), senderName);
+      await startWhatsAppPairingForChat(chatId, extractedNumbers[0], senderName);
     } else {
       await sendTelegramMessage(
         chatId,
@@ -2753,17 +2996,30 @@ export async function handleTelegramMessage(message) {
     return;
   }
 
-  if (numMatches && numMatches.length > 0) {
+  if (extractedNumbers.length > 0) {
     if (activeMode === "check_tg") {
-      await checkAndRespondTgBatch(chatId, numMatches);
+      await checkAndRespondTgBatch(chatId, extractedNumbers, false);
+    } else if (activeMode === "check_ws") {
+      await checkAndRespondBatch(chatId, extractedNumbers);
     } else {
-      await checkAndRespondBatch(chatId, numMatches);
+      let hasConnectedWa = false;
+      for (const s of activeSessions.values()) {
+        if (s.status === "connected" && s.sock) {
+          hasConnectedWa = true;
+          break;
+        }
+      }
+      if (!hasConnectedWa && getSavedTgAccountsList().length > 0) {
+        await checkAndRespondTgBatch(chatId, extractedNumbers, false);
+      } else {
+        await checkAndRespondBatch(chatId, extractedNumbers);
+      }
     }
   } else {
     if (activeMode === "check_ws" || activeMode === "check_tg") {
       await sendTelegramMessage(
         chatId,
-        "⚠️ Please send valid phone number(s) with country code (e.g. `8801712345678`) or tap *BACK* to return to the Main Menu.",
+        "⚠️ Please send valid phone number(s) with country code (e.g. `8801712345678`) or upload a `.txt` / `.csv` file, or tap *BACK* to return to the Main Menu.",
         "Markdown",
         BACK_MENU_KB
       );
@@ -2778,24 +3034,26 @@ export async function handleTelegramMessage(message) {
   }
 }
 
-export async function checkAndRespondTgBatch(chatId, rawNumbers) {
+export async function checkAndRespondTgBatch(chatId, rawNumbers, fromFile = false) {
   const tgAccounts = getSavedTgAccountsList();
-  let senderPhone = "";
+  const candidatePhones = [];
+
   for (const [ph, sess] of activeTgSessions.entries()) {
     if (sess && sess.client && sess.client.connected) {
-      senderPhone = ph;
-      break;
+      candidatePhones.push(ph);
     }
   }
-  if (!senderPhone && tgAccounts.length > 0) {
-    senderPhone = tgAccounts[0].phone;
+  for (const acc of tgAccounts) {
+    if (acc.phone && !candidatePhones.includes(acc.phone)) {
+      candidatePhones.push(acc.phone);
+    }
   }
 
-  if (!senderPhone) {
+  if (candidatePhones.length === 0) {
     await sendTelegramMessage(
       chatId,
-      "⚠️ *No active Telegram Checker account connected!*\n\nPlease log in a Telegram account first via *ADMIN PANEL ➔ SETTINGS ➔ PREMIUM MANAGEMENT ➔ TG CHECKER ➔ ADD TELEGRAM ACCOUNT*.",
-      "Markdown",
+      "⚠️ <b>No active Telegram Checker account connected!</b>\n\nPlease log in a Telegram account first via <b>ADMIN PANEL ➔ SETTINGS ➔ PREMIUM MANAGEMENT ➔ TG CHECKER ➔ ADD TELEGRAM ACCOUNT</b>.",
+      "HTML",
       BACK_MENU_KB
     );
     return;
@@ -2805,25 +3063,42 @@ export async function checkAndRespondTgBatch(chatId, rawNumbers) {
   const seen = new Set();
   for (const num of rawNumbers) {
     const clean = normalizePhone(num);
-    if (!clean || clean.length < 6) continue;
+    if (!clean || clean.length < 7) continue;
     if (seen.has(clean)) continue;
     seen.add(clean);
     normalizedList.push(clean);
   }
 
   if (normalizedList.length === 0) {
-    await sendTelegramMessage(chatId, "⚠️ No valid phone numbers found. Please provide valid numbers with country codes.", "Markdown", BACK_MENU_KB);
+    await sendTelegramMessage(
+      chatId,
+      "⚠️ No valid phone numbers found. Please provide valid numbers with country codes (e.g. <code>8801712345678</code>).",
+      "HTML",
+      BACK_MENU_KB
+    );
     return;
   }
 
-  let client;
-  try {
-    client = await getActiveTgClient(senderPhone);
-  } catch (err) {
+  let client = null;
+  let senderPhone = "";
+  let lastConnectErr = "";
+
+  for (const ph of candidatePhones) {
+    try {
+      client = await getActiveTgClient(ph);
+      senderPhone = ph;
+      break;
+    } catch (err) {
+      lastConnectErr = err?.message || String(err);
+      console.warn(`[TG Checker] Failed connecting +${ph}:`, lastConnectErr);
+    }
+  }
+
+  if (!client || !senderPhone) {
     await sendTelegramMessage(
       chatId,
-      `❌ Failed to connect Telegram Checker gateway (+${senderPhone}): ${err?.message || err}`,
-      "Markdown",
+      `❌ <b>Failed to connect Telegram Checker gateway:</b> <code>${lastConnectErr || "Session disconnected"}</code>\n\nPlease check your account in <b>ADMIN PANEL ➔ SETTINGS ➔ PREMIUM MANAGEMENT ➔ TG CHECKER</b>.`,
+      "HTML",
       BACK_MENU_KB
     );
     return;
@@ -2831,50 +3106,138 @@ export async function checkAndRespondTgBatch(chatId, rawNumbers) {
 
   const progressMsgId = await sendTelegramMessage(
     chatId,
-    `🔍 *Checking Telegram Database...*\n\n` +
-    `Total Unique Numbers: *${normalizedList.length}*\n` +
-    `Active TG Gateway: *+${senderPhone}*`,
-    "Markdown",
-    BACK_MENU_KB
+    `🔍 <b>Checking Telegram Database...</b>\n\n` +
+    `▫️ <b>Total Unique Numbers:</b> <code>${normalizedList.length}</code>\n` +
+    `▫️ <b>Active TG Gateway:</b> <code>+${senderPhone}</code>`,
+    "HTML",
+    false
   );
 
   const activeTG = [];
   const inactiveTG = [];
+  const activeDetails = new Map();
+
+  const savedAccountsByPhone = new Map();
+  for (const acc of tgAccounts) {
+    savedAccountsByPhone.set(normalizePhone(acc.phone), acc);
+  }
+
   const chunkSize = 25;
 
   for (let i = 0; i < normalizedList.length; i += chunkSize) {
     const chunk = normalizedList.slice(i, i + chunkSize);
-    const contacts = chunk.map((num, idx) =>
-      new Api.InputPhoneContact({
-        clientId: BigInt(Date.now() + idx),
-        phone: "+" + num,
-        firstName: "TGCheck",
-        lastName: String(idx)
-      })
-    );
 
-    const foundPhones = new Set();
-    const importedUserIds = [];
+    if (chunk.length <= 5) {
+      for (const num of chunk) {
+        try {
+          const resolved = await client.invoke(new Api.contacts.ResolvePhone({ phone: "+" + num }));
+          if (resolved && Array.isArray(resolved.users) && resolved.users.length > 0) {
+            const u = resolved.users[0];
+            const fullName = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+            activeDetails.set(num, {
+              phone: num,
+              name: fullName || "Telegram User",
+              username: u.username || "",
+              userId: u.id ? String(u.id) : ""
+            });
+          }
+        } catch {}
+      }
+    }
 
-    try {
-      const result = await client.invoke(new Api.contacts.ImportContacts({ contacts }));
-      if (result && Array.isArray(result.users)) {
-        for (const u of result.users) {
-          if (u.id) importedUserIds.push(u.id);
-          if (u.phone) {
-            foundPhones.add(normalizePhone(String(u.phone)));
+    const unresolvedChunk = chunk.filter((num) => !activeDetails.has(num));
+    if (unresolvedChunk.length > 0) {
+      const clientIdToPhone = new Map();
+      const contacts = unresolvedChunk.map((num, idx) => {
+        const cid = BigInt(i + idx + 1);
+        clientIdToPhone.set(cid.toString(), num);
+        return new Api.InputPhoneContact({
+          clientId: cid,
+          phone: "+" + num,
+          firstName: "TGUser",
+          lastName: ""
+        });
+      });
+
+      try {
+        const result = await client.invoke(new Api.contacts.ImportContacts({ contacts }));
+        const usersById = new Map();
+        const usersToDelete = [];
+
+        if (result && Array.isArray(result.users)) {
+          for (const u of result.users) {
+            const uid = u.id ? String(u.id) : "";
+            if (uid) {
+              usersById.set(uid, u);
+              usersToDelete.push(u);
+            }
+            if (u.phone) {
+              const cleanUPhone = normalizePhone(String(u.phone));
+              if (cleanUPhone) {
+                const rawName = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+                const cleanName = (!rawName || rawName === "TGUser" || rawName.startsWith("TGCheck")) ? "Telegram User" : rawName;
+                activeDetails.set(cleanUPhone, {
+                  phone: cleanUPhone,
+                  name: cleanName,
+                  username: u.username || "",
+                  userId: uid
+                });
+              }
+            }
           }
         }
+
+        if (result && Array.isArray(result.imported)) {
+          for (const imp of result.imported) {
+            const cidStr = imp.clientId !== undefined ? String(imp.clientId) : "";
+            const uidStr = imp.userId !== undefined ? String(imp.userId) : "";
+            const matchedPhone = clientIdToPhone.get(cidStr);
+            if (matchedPhone) {
+              const u = usersById.get(uidStr);
+              const rawName = u ? [u.firstName, u.lastName].filter(Boolean).join(" ").trim() : "";
+              const cleanName = (!rawName || rawName === "TGUser" || rawName.startsWith("TGCheck")) ? "Telegram User" : rawName;
+              activeDetails.set(matchedPhone, {
+                phone: matchedPhone,
+                name: cleanName,
+                username: u?.username || "",
+                userId: uidStr
+              });
+            }
+          }
+        }
+
+        if (unresolvedChunk.length === 1 && result && Array.isArray(result.users) && result.users.length > 0 && !activeDetails.has(unresolvedChunk[0])) {
+          const u = result.users[0];
+          const rawName = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+          const cleanName = (!rawName || rawName === "TGUser" || rawName.startsWith("TGCheck")) ? "Telegram User" : rawName;
+          activeDetails.set(unresolvedChunk[0], {
+            phone: unresolvedChunk[0],
+            name: cleanName,
+            username: u.username || "",
+            userId: u.id ? String(u.id) : ""
+          });
+        }
+
+        if (usersToDelete.length > 0) {
+          await client.invoke(new Api.contacts.DeleteContacts({ id: usersToDelete })).catch(() => {});
+        }
+      } catch (e) {
+        console.warn("[TG Bulk Check] Batch import error:", e?.message || e);
       }
-      if (importedUserIds.length > 0) {
-        await client.invoke(new Api.contacts.DeleteContacts({ id: importedUserIds })).catch(() => {});
-      }
-    } catch (e) {
-      console.warn("[TG Bulk Check] Batch import error:", e?.message || e);
     }
 
     for (const num of chunk) {
-      if (foundPhones.has(num)) {
+      if (!activeDetails.has(num) && savedAccountsByPhone.has(num)) {
+        const ownAcc = savedAccountsByPhone.get(num);
+        activeDetails.set(num, {
+          phone: num,
+          name: ownAcc.name || "Telegram User",
+          username: ownAcc.username || "",
+          userId: "Connected Gateway"
+        });
+      }
+
+      if (activeDetails.has(num)) {
         activeTG.push(num);
       } else {
         inactiveTG.push(num);
@@ -2882,45 +3245,100 @@ export async function checkAndRespondTgBatch(chatId, rawNumbers) {
     }
 
     if (normalizedList.length > 25 && progressMsgId) {
-      const pct = Math.round((Math.min(i + chunkSize, normalizedList.length) / normalizedList.length) * 100);
+      const doneCount = Math.min(i + chunkSize, normalizedList.length);
+      const pct = Math.round((doneCount / normalizedList.length) * 100);
       await editTelegramMessage(
         chatId,
         progressMsgId,
-        `🔍 *Checking Telegram Database...*\n\n` +
-        `⏳ Progress: *${Math.min(i + chunkSize, normalizedList.length)}/${normalizedList.length}* (*${pct}%*)\n` +
-        `🟢 Active TG: *${activeTG.length}* | 🔴 Inactive: *${inactiveTG.length}*`
+        `🔍 <b>Checking Telegram Database...</b>\n\n` +
+        `⏳ <b>Progress:</b> <code>${doneCount}/${normalizedList.length}</code> (<b>${pct}%</b>)\n` +
+        `🟢 <b>Active TG:</b> <code>${activeTG.length}</code> | 🔴 <b>Inactive:</b> <code>${inactiveTG.length}</code>`
       );
     }
   }
 
-  if (normalizedList.length <= 30) {
-    const report =
-      `🤖 *Telegram Checker Report*\n\n` +
-      `📊 *Total Checked:* ${normalizedList.length}\n` +
-      `✅ *Active Telegram Accounts (${activeTG.length}):*\n` +
-      `${activeTG.length > 0 ? activeTG.map((x) => `+${x}`).join("\n") : "_None_"}\n\n` +
-      `❌ *Not on Telegram (${inactiveTG.length}):*\n` +
-      `${inactiveTG.length > 0 ? inactiveTG.map((x) => `+${x}`).join("\n") : "_None_"}`;
+  // Case 1: Single number check (typed directly in chat)
+  if (normalizedList.length === 1 && !fromFile) {
+    const num = normalizedList[0];
+    const info = activeDetails.get(num);
+    let singleReport = "";
+
+    if (info) {
+      const unameStr = info.username ? `@${info.username.replace(/^@/, "")}` : "Not Set";
+      singleReport =
+        `✅ <b>Telegram Account Found!</b>\n\n` +
+        `📱 <b>Phone Number:</b> <code>+${num}</code>\n` +
+        `🟢 <b>Status:</b> Active on Telegram\n` +
+        `👤 <b>Account Name:</b> ${info.name || "Telegram User"}\n` +
+        `🔗 <b>Username:</b> ${unameStr}\n` +
+        (info.userId ? `🆔 <b>User ID:</b> <code>${info.userId}</code>` : "");
+    } else {
+      singleReport =
+        `❌ <b>No Telegram Account Found!</b>\n\n` +
+        `📱 <b>Phone Number:</b> <code>+${num}</code>\n` +
+        `🔴 <b>Status:</b> Not Registered on Telegram`;
+    }
 
     if (progressMsgId) {
-      await editTelegramMessage(chatId, progressMsgId, report);
+      await editTelegramMessage(chatId, progressMsgId, singleReport, "HTML");
     } else {
-      await sendTelegramMessage(chatId, report, "Markdown", BACK_MENU_KB);
+      await sendTelegramMessage(chatId, singleReport, "HTML", BACK_MENU_KB);
+    }
+    return;
+  }
+
+  // Case 2: Up to 30 numbers
+  if (normalizedList.length <= 30) {
+    const activeLines = activeTG.length > 0
+      ? activeTG.map((num) => {
+          const info = activeDetails.get(num);
+          const uname = info?.username ? ` (@${info.username.replace(/^@/, "")})` : "";
+          const label = info?.name && info.name !== "TGCheck" ? ` — ${info.name}${uname}` : "";
+          return `<code>+${num}</code>${label}`;
+        }).join("\n")
+      : "<i>None</i>";
+
+    const inactiveLines = inactiveTG.length > 0
+      ? inactiveTG.map((num) => `<code>+${num}</code>`).join("\n")
+      : "<i>None</i>";
+
+    const report =
+      `🤖 <b>Telegram Checker Report</b>\n\n` +
+      `📊 <b>Total Checked:</b> <code>${normalizedList.length}</code>\n\n` +
+      `✅ <b>Active Telegram Accounts (${activeTG.length}):</b>\n${activeLines}\n\n` +
+      `❌ <b>Not on Telegram (${inactiveTG.length}):</b>\n${inactiveLines}`;
+
+    if (progressMsgId) {
+      await editTelegramMessage(chatId, progressMsgId, report, "HTML");
+    } else {
+      await sendTelegramMessage(chatId, report, "HTML", BACK_MENU_KB);
+    }
+
+    if (fromFile) {
+      const activeText = activeTG.map((x) => `+${x}`).join("\n");
+      const inactiveText = inactiveTG.map((x) => `+${x}`).join("\n");
+      if (activeTG.length > 0) {
+        await sendTelegramDocument(chatId, activeText, "active_telegram_numbers.txt", `🟢 Active Telegram Numbers (${activeTG.length})`);
+      }
+      if (inactiveTG.length > 0) {
+        await sendTelegramDocument(chatId, inactiveText, "inactive_telegram_numbers.txt", `🔴 Inactive Telegram Numbers (${inactiveTG.length})`);
+      }
     }
   } else {
+    // Case 3: More than 30 numbers
     const activeText = activeTG.map((x) => `+${x}`).join("\n");
     const inactiveText = inactiveTG.map((x) => `+${x}`).join("\n");
     const summary =
-      `🤖 *Bulk Telegram Checker Report*\n\n` +
-      `📊 *Total Checked:* ${normalizedList.length}\n` +
-      `🟢 *Active Telegram Accounts:* ${activeTG.length}\n` +
-      `🔴 *Not on Telegram:* ${inactiveTG.length}\n\n` +
+      `🤖 <b>Bulk Telegram Checker Report</b>\n\n` +
+      `📊 <b>Total Checked:</b> <code>${normalizedList.length}</code>\n` +
+      `🟢 <b>Active Telegram Accounts:</b> <code>${activeTG.length}</code>\n` +
+      `🔴 <b>Not on Telegram:</b> <code>${inactiveTG.length}</code>\n\n` +
       `📂 Detailed lists are attached in the text files below.`;
 
     if (progressMsgId) {
-      await editTelegramMessage(chatId, progressMsgId, summary);
+      await editTelegramMessage(chatId, progressMsgId, summary, "HTML");
     } else {
-      await sendTelegramMessage(chatId, summary, "Markdown", BACK_MENU_KB);
+      await sendTelegramMessage(chatId, summary, "HTML", BACK_MENU_KB);
     }
 
     if (activeTG.length > 0) {
@@ -2928,6 +3346,22 @@ export async function checkAndRespondTgBatch(chatId, rawNumbers) {
     }
     if (inactiveTG.length > 0) {
       await sendTelegramDocument(chatId, inactiveText, "inactive_telegram_numbers.txt", `🔴 Inactive Telegram Numbers (${inactiveTG.length})`);
+    }
+  }
+}
+
+export async function initAllTgSessions() {
+  const accounts = getSavedTgAccountsList();
+  if (accounts.length === 0) return;
+  console.log(`[Telegram Service] Restoring ${accounts.length} saved Telegram session(s)...`);
+  for (const acc of accounts) {
+    if (acc.session) {
+      try {
+        await getActiveTgClient(acc.phone);
+        console.log(`✅ [Telegram Service] Restored session for +${acc.phone}`);
+      } catch (err) {
+        console.warn(`⚠️ [Telegram Service] Could not restore +${acc.phone}:`, err?.message || err);
+      }
     }
   }
 }
@@ -2998,11 +3432,14 @@ export async function main() {
     console.log("[Startup] No saved accounts found. Use /login in Telegram to link your first WhatsApp.");
   }
 
+  // Restore saved Telegram checker sessions
+  await initAllTgSessions();
+
   // Start Telegram bot listener
   startTelegramPolling();
 }
 
-// Execute directly if run as standalone script
-if (process.argv[1] && process.argv[1].endsWith("bot.js")) {
+// Execute directly when run as standalone script (bot.js or index.js)
+if (!process.env.LINKIFY_WEB_SERVER) {
   main();
 }

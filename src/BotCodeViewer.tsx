@@ -41,13 +41,39 @@ export const BotCodeViewer: React.FC<BotCodeViewerProps> = ({ language, onSwitch
     setTimeout(() => setCopiedCmd(null), 2000);
   };
 
-  const handleDownload = () => {
+  const handleDownload = (filename: string = 'bot.js') => {
     if (!code) return;
     const blob = new Blob([code], { type: 'text/javascript;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'bot.js';
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadPackageJson = () => {
+    const pkg = {
+      name: "linkify-telegram-whatsapp-bot",
+      version: "1.0.0",
+      private: true,
+      type: "module",
+      main: "index.js",
+      scripts: {
+        start: "node index.js",
+        bot: "node bot.js"
+      },
+      dependencies: {
+        "@whiskeysockets/baileys": "^7.0.0-rc13",
+        "pino": "^10.3.1",
+        "telegram": "^2.26.22"
+      }
+    };
+    const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'package.json';
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -63,49 +89,57 @@ export const BotCodeViewer: React.FC<BotCodeViewerProps> = ({ language, onSwitch
           </div>
           <div>
             <h2 className="text-sm md:text-base font-bold text-gray-100 flex items-center gap-2">
-              <span>bot.js</span>
+              <span>index.js / bot.js</span>
               <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/30 px-2 py-0.5 rounded-full font-mono font-semibold">
                 Standalone Node.js ESM
               </span>
             </h2>
             <p className="text-xs text-slate-400">
               {language === 'bn' 
-                ? 'একক (Single) সম্পূর্ণ স্বয়ংসম্পূর্ণ ফাইল - সরাসরি VPS এ node bot.js কমান্ডে চলবে।' 
+                ? 'Zero-Bot বা প্যানেলে হোস্ট করতে নিচের সবুজ বাটন থেকে index.js এবং package.json ডাউনলোড করে আপলোড করুন।' 
                 : 'Self-contained standalone single file with Baileys + Telegram bot engine.'}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={onSwitchToVps}
-            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
+            onClick={() => handleDownload('index.js')}
+            className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-gray-950 text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-md"
           >
-            <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{language === 'bn' ? '🖥️ লাইভ কনসোলে টেস্ট' : '🖥️ Test in Live VPS'}</span>
+            <Download className="w-3.5 h-3.5" />
+            <span>{language === 'bn' ? 'index.js ডাউনলোড (Zero-Bot)' : 'Download index.js'}</span>
           </button>
 
           <button
-            onClick={handleDownload}
+            onClick={handleDownloadPackageJson}
+            className="px-3 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-gray-950 text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-md"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{language === 'bn' ? 'package.json ডাউনলোড' : 'Download package.json'}</span>
+          </button>
+
+          <button
+            onClick={() => handleDownload('bot.js')}
             className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>{language === 'bn' ? 'ডাউনলোড' : 'Download'}</span>
+            <span>{language === 'bn' ? 'bot.js ডাউনলোড' : 'Download bot.js'}</span>
           </button>
 
           <button
             onClick={handleCopyCode}
-            className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-gray-950 text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-md"
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
           >
             {copied ? (
               <>
-                <Check className="w-3.5 h-3.5" />
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
                 <span>{language === 'bn' ? 'কপি হয়েছে!' : 'Copied!'}</span>
               </>
             ) : (
               <>
                 <Copy className="w-3.5 h-3.5" />
-                <span>{language === 'bn' ? 'সম্পূর্ণ কোড কপি' : 'Copy Full Code'}</span>
+                <span>{language === 'bn' ? 'কোড কপি' : 'Copy Code'}</span>
               </>
             )}
           </button>
