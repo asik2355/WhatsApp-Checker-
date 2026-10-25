@@ -488,7 +488,131 @@ export const VpsConsole: React.FC<VpsConsoleProps> = ({
 
       </div>
 
-      {/* 4. MODAL: QUICK WHATSAPP /LOGIN VIA TERMINAL */}
+      {/* 3.5. TELEGRAM BOT MENU BUILDER KEYBOARD PREVIEW (_MAIN_MENU_KB) */}
+      <div className="bg-[#111b21] p-4 rounded-2xl border border-slate-800 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-base">📱</span>
+            <div>
+              <h4 className="text-xs font-bold text-gray-200 font-mono flex items-center gap-2">
+                <span>_MAIN_MENU_KB</span>
+                <span className="text-[10px] bg-slate-800 text-slate-350 px-1.5 py-0.5 rounded font-mono font-normal">
+                  ReplyKeyboardMarkup (5 Rows)
+                </span>
+              </h4>
+              <p className="text-[10px] text-slate-400">
+                {language === 'bn' 
+                  ? 'টেলিগ্রাম বটের লাইভ কাস্টম মেনু বাটন (ক্লিক করে টেস্ট করুন)' 
+                  : 'Live custom Telegram bot keyboard layout (click any button to test)'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/70 border border-emerald-800/40 px-2 py-0.5 rounded-full">
+              resize_keyboard=True
+            </span>
+            <button
+              onClick={() => handleRunCommand('menu')}
+              className="text-[10px] text-blue-400 hover:text-blue-300 font-mono hover:underline cursor-pointer"
+            >
+              $ menu
+            </button>
+          </div>
+        </div>
+
+        {/* 5 Rows Menu Grid */}
+        <div className="space-y-2 max-w-xl mx-auto font-mono">
+          
+          {/* Row 1: CONNECT WS CHECKER */}
+          <div>
+            <button
+              type="button"
+              disabled={isExecuting}
+              onClick={() => handleRunCommand('CONNECT WS CHECKER')}
+              className="w-full bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 hover:border-blue-400 text-blue-300 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-sm active:scale-[0.99] disabled:opacity-50"
+            >
+              <span>🔗</span>
+              <span>CONNECT WS CHECKER</span>
+              <span className="text-[9px] text-blue-400/60 font-normal ml-auto hidden sm:inline">style: primary</span>
+            </button>
+          </div>
+
+          {/* Row 2: CHECK WS NUMBER */}
+          <div>
+            <button
+              type="button"
+              disabled={isExecuting}
+              onClick={() => handleRunCommand('CHECK WS NUMBER')}
+              className="w-full bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-sm active:scale-[0.99] disabled:opacity-50"
+            >
+              <span>🔍</span>
+              <span>CHECK WS NUMBER</span>
+              <span className="text-[9px] text-emerald-400/60 font-normal ml-auto hidden sm:inline">style: success</span>
+            </button>
+          </div>
+
+          {/* Row 3: BUY WS API | HELP */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={isExecuting}
+              onClick={() => handleRunCommand('BUY WS API')}
+              className="bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 hover:border-blue-400 text-blue-300 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm active:scale-[0.99] disabled:opacity-50"
+            >
+              <span>⚡</span>
+              <span className="truncate">BUY WS API</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isExecuting}
+              onClick={() => handleRunCommand('HELP')}
+              className="bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 hover:border-blue-400 text-blue-300 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm active:scale-[0.99] disabled:opacity-50"
+            >
+              <span>📖</span>
+              <span className="truncate">HELP</span>
+            </button>
+          </div>
+
+          {/* Row 4: MY PROFILE | MY PACKAGE */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={isExecuting}
+              onClick={() => handleRunCommand('MY PROFILE')}
+              className="bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm active:scale-[0.99] disabled:opacity-50"
+            >
+              <span>👤</span>
+              <span className="truncate">MY PROFILE</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isExecuting}
+              onClick={() => handleRunCommand('MY PACKAGE')}
+              className="bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm active:scale-[0.99] disabled:opacity-50"
+            >
+              <span>📦</span>
+              <span className="truncate">MY PACKAGE</span>
+            </button>
+          </div>
+
+          {/* Row 5: ADMIN PANEL */}
+          <div>
+            <button
+              type="button"
+              disabled={isExecuting}
+              onClick={() => handleRunCommand('ADMIN PANEL')}
+              className="w-full bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 hover:border-rose-400 text-rose-300 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-sm active:scale-[0.99] disabled:opacity-50"
+            >
+              <span>⚙️</span>
+              <span>ADMIN PANEL</span>
+              <span className="text-[9px] text-rose-400/60 font-normal ml-auto hidden sm:inline">style: danger</span>
+            </button>
+          </div>
+
+        </div>
+      </div>
       {showLoginModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
           <div className="bg-[#182229] border border-slate-800 rounded-2xl p-5 max-w-md w-full space-y-4 text-left shadow-2xl">

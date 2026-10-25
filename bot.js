@@ -18,9 +18,261 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 
 // --- CONFIGURATION ---
-export const TG_TOKEN = process.env.TG_TOKEN || "8887360085:AAGFnQjUY1lnmDwHJTFo3T7O56xFEW9poGU";
+export const TG_TOKEN = process.env.TG_TOKEN || "8847916537:AAFC_L4RgUgO_molInYI0FKhgpmVElhwFHY";
 export const TG_API_URL = `https://api.telegram.org/bot${TG_TOKEN}`;
 export const DB_FILE = path.join(process.cwd(), "db_accounts.json");
+
+// ==========================================
+// Premium Emoji Database & Utilities (All-in-One)
+// ==========================================
+export const PEM = {
+  "ok": '<tg-emoji emoji-id="5352694861990501856">✅</tg-emoji>',
+  "no": '<tg-emoji emoji-id="5420130255174145507">❌</tg-emoji>',
+  "warn": '<tg-emoji emoji-id="5336944168944047463">⚠️</tg-emoji>',
+  "admin": '<tg-emoji emoji-id="5353032893096567467">📊</tg-emoji>',
+  "user": '<tg-emoji emoji-id="5429274992166609833">👤</tg-emoji>',
+  "file": '<tg-emoji emoji-id="5352721946054268944">📁</tg-emoji>',
+  "rocket": '<tg-emoji emoji-id="5352597830089347330">🚀</tg-emoji>',
+  "graph": '<tg-emoji emoji-id="5352877703043258544">📈</tg-emoji>',
+  "money": '<tg-emoji emoji-id="5440896830072179569">💸</tg-emoji>',
+  "cash": '<tg-emoji emoji-id="5440896830072179569">💵</tg-emoji>',
+  "lock": '<tg-emoji emoji-id="5296369303661067030">🔒</tg-emoji>',
+  "bullet": '<tg-emoji emoji-id="4990307318513009602">▪️</tg-emoji>',
+  "email": '<tg-emoji emoji-id="4970246557065544891">📧</tg-emoji>',
+  "phone": '<tg-emoji emoji-id="5922665746910941123">📞</tg-emoji>',
+  "party": '<tg-emoji emoji-id="5461151367559141950">🎉</tg-emoji>',
+  "gift": '<tg-emoji emoji-id="5913600088856334619">🎁</tg-emoji>',
+  "msg": '<tg-emoji emoji-id="5337302974806922068">💬</tg-emoji>',
+  "gear": '<tg-emoji emoji-id="5420155432272438703">⚙️</tg-emoji>',
+  "link": '<tg-emoji emoji-id="5420517437885943844">🔗</tg-emoji>',
+  "trash": '<tg-emoji emoji-id="5796499549287615611">🗑</tg-emoji>',
+  "upload": '<tg-emoji emoji-id="5445355530111437729">📤</tg-emoji>',
+  "world": '<tg-emoji emoji-id="5336972142066047577">🌐</tg-emoji>',
+  "num": '<tg-emoji emoji-id="5303214794336125778">🔢</tg-emoji>',
+  "pin": '<tg-emoji emoji-id="5352922460897452503">📍</tg-emoji>',
+  "star": '<tg-emoji emoji-id="5352552689983067014">✨</tg-emoji>',
+  "hi": '<tg-emoji emoji-id="5353027129250453493">👋</tg-emoji>',
+  "shopping_bags": '<tg-emoji emoji-id="4958714256343171878">🛍️</tg-emoji>',
+  "lightning": '<tg-emoji emoji-id="5240122519326860770">⚡</tg-emoji>',
+  "tag": '<tg-emoji emoji-id="5240228673738527951">🏷</tg-emoji>',
+  "bookmark": '<tg-emoji emoji-id="5240228673738527951">🔖</tg-emoji>',
+  "card": '<tg-emoji emoji-id="5429452906891880671">💳</tg-emoji>',
+  "diamond": '<tg-emoji emoji-id="5352838545826420397">💎</tg-emoji>',
+  "crown": '<tg-emoji emoji-id="5353032893096567467">👑</tg-emoji>',
+  "fire": '<tg-emoji emoji-id="5429362935916962442">🔥</tg-emoji>',
+  "robot": '<tg-emoji emoji-id="5857154735299104907">🤖</tg-emoji>',
+  "coin": '<tg-emoji emoji-id="5348469219761626211">🪙</tg-emoji>',
+  "info": '<tg-emoji emoji-id="5438411478526892601">ℹ️</tg-emoji>',
+  "referral": '<tg-emoji emoji-id="5429410266456564369">👥</tg-emoji>',
+  "balance": '<tg-emoji emoji-id="5429452906891880671">💳</tg-emoji>',
+  "leaderboard": '<tg-emoji emoji-id="5848402833195406382">🏆</tg-emoji>',
+  "arrow_right": '<tg-emoji emoji-id="6048465553759147899">➡️</tg-emoji>',
+  "back": '<tg-emoji emoji-id="5438541186539232243">🔙</tg-emoji>',
+  "clock": '<tg-emoji emoji-id="5429271062271535569">🕓</tg-emoji>',
+  "point_up": '<tg-emoji emoji-id="5019617635629794161">☝</tg-emoji>'
+};
+
+export const GLOBAL_BODY_EMOJIS = {
+  "💸": "5440896830072179569",
+  "💵": "5440896830072179569",
+  "🔒": "5296369303661067030",
+  "🔐": "5296369303661067030",
+  "▪️": "4990307318513009602",
+  "▪": "4990307318513009602",
+  "📧": "4970246557065544891",
+  "✉️": "4970246557065544891",
+  "✉": "4970246557065544891",
+  "📞": "5922665746910941123",
+  "🎉": "5461151367559141950",
+  "👤": "5429274992166609833",
+  "🛍️": "4958714256343171878",
+  "🛍": "4958714256343171878",
+  "🔖": "5240228673738527951",
+  "🏷️": "5240228673738527951",
+  "🏷": "5240228673738527951",
+  "📈": "5352877703043258544",
+  "💳": "5429452906891880671",
+  "✅": "5352694861990501856",
+  "🟡": "5438541186539232243",
+  "🟣": "5239965456667812809",
+  "🟠": "5237806896299157399",
+  "⚡": "5240122519326860770",
+  "🇧🇩": "5291824687096027834",
+  "🇮🇳": "5291933173674957761",
+  "🇬🇧": "5293993521026453119",
+  "🛒": "5312361253610475399",
+  "👇": "5231102735817918643",
+  "🎧": "5258474669769497337",
+  "👨💻": "5418063924933173277",
+  "📦": "5388683870432410767",
+  "💡": "5429492566619892958",
+  "🖥️": "5318834134397770844",
+  "🖥": "5318834134397770844",
+  "👥": "5325926401008746697",
+  "🤖": "5857154735299104907",
+  "◀️": "5438541186539232243",
+  "◀": "5438541186539232243",
+  "🟢": "5192812028632274956",
+  "🗑️": "5796499549287615611",
+  "🗑": "5796499549287615611",
+  "📋": "5435970940670320222",
+  "▶️": "5208607440878197365",
+  "▶": "5208607440878197365",
+  "⏹️": "5413328053474443870",
+  "⏹": "5413328053474443870",
+  "🔄": "5438433185291611807",
+  "🔴": "5364250321176505463",
+  "🔎": "5258396243666681152",
+  "🔍": "5463352748751753567",
+  "📛": "5255835635704408236",
+  "💾": "5373342633798167891",
+  "🧠": "5336991770066559836",
+  "⏱️": "5947290074319162163",
+  "⏱": "5947290074319162163",
+  "👑": "5353032893096567467",
+  "➖": "5870818207383686839",
+  "🚫": "5334807341109908955",
+  "😒": "5334763399299506604",
+  "🌐": "5336972142066047577",
+  "🌟": "5337102391244263212",
+  "🕓": "5336983442125001376",
+  "⌛": "5337172996211648018",
+  "💬": "5337302974806922068",
+  "🍏": "5337132498965010628",
+  "❔": "5336850036145823599",
+  "⚠️": "5336944168944047463",
+  "🔥": "5429362935916962442",
+  "🥚": "5348390922507817684",
+  "👨⚖": "5334763399299506604",
+  "👨⚖️": "5334763399299506604",
+  "🐁": "5348494358205207761",
+  "🧻": "5348486915026884464",
+  "⚗": "5346311574221000149",
+  "🛴": "5348075478634766440",
+  "📊": "5429571662737611814",
+  "🔢": "5352862640592949843",
+  "📁": "5352721946054268944",
+  "🚀": "5352597830089347330",
+  "💎": "5352838545826420397",
+  "📍": "5352922460897452503",
+  "👋": "5353027129250453493",
+  "1️⃣": "6240078725031923871",
+  "2️⃣": "5237806896299157399",
+  "3️⃣": "5239965456667812809",
+  "4️⃣": "5237911487342751418",
+  "5️⃣": "5240278297790686165",
+  "6️⃣": "5237964637563036583",
+  "7️⃣": "5240349778931404422",
+  "8️⃣": "5240346884123436723",
+  "9️⃣": "5240268144487999429",
+  "🔤": "5352727417842606016",
+  "📣": "5352980533150259581",
+  "📤": "5353001161878182134",
+  "✨": "5352552689983067014",
+  "🔹": "5352638632278660622",
+  "🎙": "5355102594886833928",
+  "💴": "5352985330628730418",
+  "📅": "5352585194295564660",
+  "📴": "5352974971167611327",
+  "✏️": "5395444784611480792",
+  "✏": "5395444784611480792",
+  "📱": "5922665746910941123",
+  "🔗": "5420517437885943844",
+  "❌": "5420130255174145507",
+  "⚙️": "5420155432272438703",
+  "⚙": "5420155432272438703",
+  "🛠": "5420155432272438703",
+  "🫂": "5420145051336485498",
+  "➕": "5420323438508155202",
+  "🎁": "5913600088856334619",
+  "🏢": "5420156334215565595",
+  "📝": "5192739271886282680",
+  "🛡": "5190447043545438788",
+  "🤝": "5192805934073685937",
+  "💰": "5190576863226933563",
+  "👀": "5190645917711114179",
+  "🕹": "5193100774988617665",
+  "🧪": "5190781475468915802",
+  "🎨": "5190751148704833975",
+  "📂": "5257969839313526622",
+  "🌍": "5780471598922337683",
+  "📌": "5318986077455795572",
+  "📢": "5789428375261023681",
+  "🆔": "5352862640592949843",
+  "🔔": "5352980533150259581",
+  "🏦": "5348469219761626211",
+  "🧾": "5192739271886282680",
+  "🔑": "5197288647275071607",
+  "ℹ️": "5438411478526892601",
+  "ℹ": "5438411478526892601",
+  "🪙": "5348469219761626211",
+  "🏆": "5848402833195406382",
+  "🥇": "5848402833195406382",
+  "🥈": "5848402833195406382",
+  "🥉": "5848402833195406382",
+  "☝": "5019617635629794161",
+  "☝️": "5019617635629794161",
+  "➡️": "6048465553759147899",
+  "🔙": "5438541186539232243",
+  "🌸": "5352552689983067014",
+  "📩": "4970246557065544891"
+};
+
+const sortedEmojiKeys = Object.keys(GLOBAL_BODY_EMOJIS).sort((a, b) => b.length - a.length);
+
+export function pem(key) {
+  return PEM[key] || "";
+}
+
+export function applyPremiumEmojis(rawText) {
+  if (!rawText) return "";
+  const existingTags = [];
+  let protectedText = rawText.replace(/<tg-emoji[^>]*>.*?<\/tg-emoji>/gi, (match) => {
+    existingTags.push(match);
+    return `__TG_EMOJI_PLACEHOLDER_${existingTags.length - 1}__`;
+  });
+
+  for (const emoji of sortedEmojiKeys) {
+    if (protectedText.includes(emoji)) {
+      const emojiId = GLOBAL_BODY_EMOJIS[emoji];
+      const replacement = `<tg-emoji emoji-id="${emojiId}">${emoji}</tg-emoji>`;
+      protectedText = protectedText.split(emoji).join(replacement);
+    }
+  }
+
+  protectedText = protectedText.replace(/__TG_EMOJI_PLACEHOLDER_(\d+)__/g, (_, idx) => {
+    return existingTags[parseInt(idx, 10)] || "";
+  });
+
+  return protectedText;
+}
+
+export function formatTelegramHtml(text) {
+  if (!text) return "";
+  const savedTags = [];
+  let result = text.replace(/<(\/?[a-zA-Z0-9_-]+)(?:\s+[^>]*)?>/g, (tag) => {
+    savedTags.push(tag);
+    return `__HTML_TAG_${savedTags.length - 1}__`;
+  });
+
+  result = result
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  result = result.replace(/__HTML_TAG_(\d+)__/g, (_, idx) => {
+    return savedTags[parseInt(idx, 10)] || "";
+  });
+
+  result = result.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code}</code></pre>`);
+  result = result.replace(/`([^`\n]+)`/g, (_, code) => `<code>${code}</code>`);
+  result = result.replace(/\*([^*\n]+)\*/g, (_, bold) => `<b>${bold}</b>`);
+  result = result.replace(/_([^_\n]+)_/g, (_, italic) => `<i>${italic}</i>`);
+  result = result.replace(/~([^~\n]+)~/g, (_, strike) => `<s>${strike}</s>`);
+
+  result = applyPremiumEmojis(result);
+  return result;
+}
 
 // --- IN-MEMORY SESSION STATES ---
 const activeSessions = new Map();
@@ -135,8 +387,10 @@ export function deleteAccountFromDb(phone) {
 }
 
 // --- TELEGRAM BOT API HELPERS ---
-export const MAIN_MENU_KB = {
-  keyboard: [
+export const ADMIN_CHAT_ID = "8343010638";
+
+export function getMainMenuKeyboard(chatId) {
+  const rows = [
     [
       {
         text: "CONNECT WS CHECKER",
@@ -153,36 +407,207 @@ export const MAIN_MENU_KB = {
     ],
     [
       {
-        text: "BUY PACKAGE",
+        text: "BUY WS AND TG API",
         icon_custom_emoji_id: "5170692113834181832",
-        style: "success"
+        style: "primary"
       },
       {
-        text: "HELP",
-        icon_custom_emoji_id: "5832352677849205948",
+        text: "MY PACKAGE",
+        icon_custom_emoji_id: "5312361253610475399",
         style: "primary"
       }
     ],
     [
       {
+        text: "MY PROFILE",
+        icon_custom_emoji_id: "5208604387156448480",
+        style: "success"
+      },
+      {
+        text: "HELP",
+        icon_custom_emoji_id: "5832352677849205948",
+        style: "success"
+      }
+    ]
+  ];
+
+  if (String(chatId) === ADMIN_CHAT_ID) {
+    rows.push([
+      {
         text: "ADMIN PANEL",
         icon_custom_emoji_id: "5764869872521581153",
         style: "danger"
       }
+    ]);
+  }
+
+  return {
+    keyboard: rows,
+    resize_keyboard: true
+  };
+}
+
+export const MAIN_MENU_KB = getMainMenuKeyboard();
+
+// --- ADMIN INLINE KEYBOARDS ---
+export const ADMIN_PANEL_KEYBOARD = {
+  inline_keyboard: [
+    [
+      {
+        text: "⚙️ SETTINGS",
+        icon_custom_emoji_id: "5420155432272438703",
+        callback_data: "system_settings",
+        style: "primary"
+      }
     ]
-  ],
-  resize_keyboard: true
+  ]
 };
 
-export async function sendTelegramMessage(chatId, text, parseMode = "Markdown", replyMarkup = MAIN_MENU_KB) {
+export const SETTINGS_MENU_KEYBOARD = {
+  inline_keyboard: [
+    [
+      {
+        text: "𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧",
+        icon_custom_emoji_id: "5764869872521581153",
+        callback_data: "premium_management_menu",
+        style: "primary"
+      }
+    ],
+    [
+      {
+        text: "Back",
+        icon_custom_emoji_id: "5267490665117275176",
+        callback_data: "admin_panel_home",
+        style: "danger"
+      }
+    ]
+  ]
+};
+
+export const PREMIUM_MANAGEMENT_KEYBOARD = {
+  inline_keyboard: [
+    [
+      {
+        text: "𝗠𝗔𝗡𝗔𝗚𝗘 𝗣𝗔𝗖𝗞𝗔𝗚𝗘",
+        icon_custom_emoji_id: "5123113788979021186",
+        callback_data: "dummy_alert",
+        style: "primary"
+      }
+    ],
+    [
+      {
+        text: "𝗧𝗚 𝗖𝗛𝗘𝗖𝗞𝗘𝗥",
+        icon_custom_emoji_id: "5429136513831057777",
+        callback_data: "dummy_alert",
+        style: "success"
+      }
+    ],
+    [
+      {
+        text: "𝗪𝗛𝗔𝗧𝗦𝗔𝗣𝗣 𝗖𝗛𝗘𝗖𝗞𝗘𝗥",
+        icon_custom_emoji_id: "5429612632430654504",
+        callback_data: "dummy_alert",
+        style: "success"
+      }
+    ],
+    [
+      {
+        text: "Back",
+        icon_custom_emoji_id: "5267490665117275176",
+        callback_data: "system_settings",
+        style: "danger"
+      }
+    ]
+  ]
+};
+
+export function getAdminPanelDashboardText() {
+  const accounts = getSavedAccountsList();
+  return (
+    `⚙️ <b>ADMIN PANEL (অ্যাডমিন কন্ট্রোল সেন্টার)</b>\n\n` +
+    `👑 <b>অ্যাডমিন আইডি:</b> <code>${ADMIN_CHAT_ID}</code> (অথরাইজড)\n\n` +
+    `📊 <b>বর্তমান সিস্টেম অবস্থা:</b>\n` +
+    `▫️ একটিভ গেটওয়ে: ${currentActivePhone ? `🟢 +${currentActivePhone}` : "🔴 কোনো সক্রিয় অ্যাকাউন্ট নেই"}\n` +
+    `▫️ মোট সংরক্ষিত অ্যাকাউন্ট: ${accounts.length} টি\n` +
+    `▫️ মেমরি সেশন: ${activeSessions.size} টি\n` +
+    `▫️ টেলিগ্রাম বট: 🟢 অনলাইন (@WhatsappCheckerApi_Bot)\n\n` +
+    `🛠 <b>অ্যাডমিন কমান্ডসমূহ:</b>\n` +
+    `▫️ <code>/status</code> - সকল ইউজারের লিঙ্ককৃত অ্যাকাউন্টের লাইভ স্ট্যাটাস দেখুন\n` +
+    `▫️ <code>/login &lt;ফোন নম্বর&gt;</code> - নতুন হোয়াটসঅ্যাপ গেটওয়ে পেয়ারিং কোড নিন\n` +
+    `▫️ <code>/logout &lt;ফোন নম্বর&gt;</code> - যেকোনো অ্যাকাউন্ট বা সেশন ডিলিট করুন\n` +
+    `▫️ <code>/check &lt;ফোন নম্বর&gt;</code> - সরাসরি নম্বর ভ্যালিডেশন করুন\n` +
+    `▫️ বাল্ক ফাইল আপলোড - আনলিমিটেড নম্বর প্রসেসিং\n\n` +
+    `👇 সিস্টেম সেটিংস ম্যানেজ করতে নিচের <b>SETTINGS</b> বাটনে ক্লিক করুন:`
+  );
+}
+
+export async function handleTelegramCallbackQuery(call) {
+  const callId = call.id;
+  const data = call.data || "";
+  const fromId = call.from?.id;
+  const chatId = call.message?.chat?.id || fromId;
+  const msgId = call.message?.message_id;
+
+  if (String(fromId) !== ADMIN_CHAT_ID && String(chatId) !== ADMIN_CHAT_ID) {
+    await answerTelegramCallbackQuery(callId, "⛔ অ্যাক্সেস ডিনাইড: আপনি এই সিস্টেমের অ্যাডমিন নন!", true);
+    return;
+  }
+
+  if (data === "system_settings") {
+    const text = `⚙️ <b>SYSTEM SETTINGS</b>\n\nএডমিন সিস্টেমের সকল সেটিংস কনফিগার করতে নিচের মেনু সিলেক্ট করুন:`;
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", SETTINGS_MENU_KEYBOARD);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", SETTINGS_MENU_KEYBOARD);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data === "premium_management_menu") {
+    const text = `💎 <b>PREMIUM MANAGEMENT</b>\n\nConfigure premium features and checkers below:`;
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", PREMIUM_MANAGEMENT_KEYBOARD);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", PREMIUM_MANAGEMENT_KEYBOARD);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data === "admin_panel_home") {
+    const text = getAdminPanelDashboardText();
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", ADMIN_PANEL_KEYBOARD);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", ADMIN_PANEL_KEYBOARD);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data === "dummy_alert") {
+    await answerTelegramCallbackQuery(callId, "⚠️ এই ফিচারটির কনফিগারেশন শীঘ্রই যোগ করা হচ্ছে (Dummy Alert)।", true);
+    return;
+  }
+
+  await answerTelegramCallbackQuery(callId);
+}
+
+export async function sendTelegramMessage(chatId, text, parseMode = "HTML", replyMarkup = null) {
   try {
+    const formattedText = formatTelegramHtml(text);
+    const finalMarkup = (!replyMarkup || replyMarkup === MAIN_MENU_KB)
+      ? getMainMenuKeyboard(chatId)
+      : replyMarkup;
+
     const payload = {
       chat_id: chatId,
-      text,
-      parse_mode: parseMode
+      text: formattedText,
+      parse_mode: "HTML"
     };
-    if (replyMarkup) {
-      payload.reply_markup = replyMarkup;
+    if (finalMarkup) {
+      payload.reply_markup = finalMarkup;
     }
     const res = await fetch(`${TG_API_URL}/sendMessage`, {
       method: "POST",
@@ -193,7 +618,22 @@ export async function sendTelegramMessage(chatId, text, parseMode = "Markdown", 
       const data = await res.json();
       return data.result?.message_id || null;
     } else {
-      console.error("[Telegram] sendMessage failed:", res.status, await res.text());
+      const errText = await res.text();
+      console.warn("[Telegram] HTML sendMessage failed, falling back:", res.status, errText);
+      const fallbackPayload = {
+        chat_id: chatId,
+        text,
+      };
+      if (finalMarkup) fallbackPayload.reply_markup = finalMarkup;
+      const fbRes = await fetch(`${TG_API_URL}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fallbackPayload),
+      });
+      if (fbRes.ok) {
+        const fbData = await fbRes.json();
+        return fbData.result?.message_id || null;
+      }
     }
   } catch (err) {
     console.error("[Telegram] Error sending message:", err);
@@ -201,18 +641,59 @@ export async function sendTelegramMessage(chatId, text, parseMode = "Markdown", 
   return null;
 }
 
-export async function editTelegramMessage(chatId, messageId, text, parseMode = "Markdown") {
+export async function editTelegramMessage(chatId, messageId, text, parseMode = "HTML", replyMarkup = null) {
   try {
+    const formattedText = formatTelegramHtml(text);
+    const payload = {
+      chat_id: chatId,
+      message_id: messageId,
+      text: formattedText,
+      parse_mode: "HTML",
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
     const res = await fetch(`${TG_API_URL}/editMessageText`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, parse_mode: parseMode }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      console.error("[Telegram] editMessageText failed:", res.status, await res.text());
+      const errText = await res.text();
+      console.warn("[Telegram] HTML editMessageText failed, retrying plain:", res.status, errText);
+      const fallbackPayload = {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+      };
+      if (replyMarkup) fallbackPayload.reply_markup = replyMarkup;
+      await fetch(`${TG_API_URL}/editMessageText`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fallbackPayload),
+      });
     }
   } catch (err) {
     console.error("[Telegram] Error editing message:", err);
+  }
+}
+
+export async function answerTelegramCallbackQuery(callbackQueryId, text = null, showAlert = false) {
+  try {
+    const payload = {
+      callback_query_id: callbackQueryId,
+    };
+    if (text) {
+      payload.text = text;
+      payload.show_alert = showAlert;
+    }
+    await fetch(`${TG_API_URL}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.error("[Telegram] Error answering callback query:", err);
   }
 }
 
@@ -220,7 +701,8 @@ export async function sendTelegramDocument(chatId, fileContent, fileName, captio
   try {
     const formData = new FormData();
     formData.append("chat_id", String(chatId));
-    formData.append("caption", caption);
+    formData.append("caption", formatTelegramHtml(caption));
+    formData.append("parse_mode", "HTML");
     const blob = new Blob([fileContent], { type: "text/plain" });
     formData.append("document", blob, fileName);
 
@@ -593,21 +1075,25 @@ export async function handleTelegramMessage(message) {
 
   // /start
   if (text.startsWith("/start")) {
+    const isAdmin = String(chatId) === ADMIN_CHAT_ID;
+    const adminLine = isAdmin ? `🔘 *ADMIN PANEL* - সিস্টেম অ্যাডমিন কন্ট্রোল প্যানেল\n\n` : `\n`;
     const startMsg =
       `👋 *স্বাগতম! আমি আপনার লিঙ্কফাই হোয়াটসঅ্যাপ চেকার বট।*\n\n` +
       `আপনার টেলিগ্রাম বট থেকে সরাসরি হোয়াটসঅ্যাপ লগইন এবং নম্বর চেক করতে পারবেন। নিচের মেনু বাটনগুলো ব্যবহার করুন:\n\n` +
       `🔘 *CONNECT WS CHECKER* - হোয়াটসঅ্যাপ লিঙ্ক করার পেয়ারিং কোড নিন\n` +
       `🔘 *CHECK WS NUMBER* - হোয়াটসঅ্যাপ নম্বর চেক নির্দেশিকা\n` +
-      `🔘 *BUY PACKAGE* - প্রিমিয়াম প্যাকেজ ও ক্রেডিট\n` +
+      `🔘 *BUY WS AND TG API* - হোয়াটসঅ্যাপ ও টেলিগ্রাম এপিআই প্যাকেজ ও কি\n` +
       `🔘 *HELP* - সহায়তা এবং সকল কমান্ড\n` +
-      `🔘 *ADMIN PANEL* - সিস্টেম অ্যাডমিন কন্ট্রোল প্যানেল\n\n` +
+      `🔘 *MY PROFILE* - আপনার প্রোফাইল ও সংরক্ষিত অ্যাকাউন্টের বিবরণ\n` +
+      `🔘 *MY PACKAGE* - বর্তমান প্যাকেজ ও লিমিট স্ট্যাটাস\n` +
+      adminLine +
       `📌 *সরাসরি কমান্ডসমূহ:*\n` +
       `▫️ \`/login <ফোন নম্বর>\` - হোয়াটসঅ্যাপ লিঙ্ক করার জন্য ৮ সংখ্যার পেয়ারিং কোড পান। (যেমন: \`/login 8801700000000\`)\n` +
       `▫️ \`/check <ফোন নম্বর>\` - নম্বরটিতে হোয়াটসঅ্যাপ আছে কিনা ইনস্ট্যান্ট চেক করুন। (যেমন: \`/check 8801712345678\`)\n` +
       `▫️ \`/status\` - লিঙ্ককৃত অ্যাকাউন্ট ও কানেকশন অবস্থা দেখুন।\n` +
       `▫️ \`/logout <ফোন নম্বর>\` - অ্যাকাউন্ট মুছে ফেলুন বা ডিসকানেক্ট করুন।\n\n` +
       `💡 *বাল্ক চেক:* মেসেজে একসাথে একাধিক নম্বর লিখুন অথবা কোনো \`.txt\` বা \`.csv\` ফাইল সেন্ড করুন, বট অটোমেটিক চেক করে রিপোর্ট পাঠাবে! 🚀`;
-    await sendTelegramMessage(chatId, startMsg, "Markdown", MAIN_MENU_KB);
+    await sendTelegramMessage(chatId, startMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
 
@@ -620,7 +1106,7 @@ export async function handleTelegramMessage(message) {
       `*উদাহরণ:*\n` +
       `\`/login 8801700000000\`\n\n` +
       `ℹ️ কমান্ড পাঠালে আপনি একটি ৮-ডিজিটের পেয়ারিং কোড পাবেন যা দিয়ে মোবাইলের WhatsApp অ্যাপ থেকে *Linked Devices* এ গিয়ে লিঙ্ক করতে পারবেন।`;
-    await sendTelegramMessage(chatId, connectMsg, "Markdown", MAIN_MENU_KB);
+    await sendTelegramMessage(chatId, connectMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
 
@@ -632,16 +1118,25 @@ export async function handleTelegramMessage(message) {
       `২️⃣ *দ্রুত চেক:* এক বা একাধিক নম্বর সরাসরি মেসেজে লিখে পাঠিয়ে দিন\n` +
       `৩️⃣ *বাল্ক ফাইল চেক:* নম্বরগুলোর একটি \`.txt\` বা \`.csv\` ফাইল এখানে আপলোড দিন\n\n` +
       `বট সাথে সাথে ফিল্টার করে সক্রিয় ও নিষ্ক্রিয় তালিকা জানিয়ে দেবে! ⚡`;
-    await sendTelegramMessage(chatId, checkGuideMsg, "Markdown", MAIN_MENU_KB);
+    await sendTelegramMessage(chatId, checkGuideMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
 
-  if (text === "BUY PACKAGE" || text.includes("BUY PACKAGE")) {
-    const buyPkgMsg = 
-      `💎 *BUY PACKAGE*\n\n` +
-      `আমাদের প্রিমিয়াম প্যাকেজ ও ক্রেডিট প্ল্যান শীঘ্রই যুক্ত হচ্ছে।\n` +
-      `বিস্তারিত তথ্য ও কাস্টম প্ল্যানের জন্য অ্যাডমিনের সাথে যোগাযোগ রাখুন।`;
-    await sendTelegramMessage(chatId, buyPkgMsg, "Markdown", MAIN_MENU_KB);
+  if (text === "BUY WS AND TG API" || text.includes("BUY WS AND TG API") || text === "BUY WS API" || text.includes("BUY WS API") || text === "BUY PACKAGE" || text.includes("BUY PACKAGE")) {
+    const buyApiMsg = 
+      `⚡ *BUY WS AND TG API (WhatsApp & Telegram Checker API)*\n\n` +
+      `আপনার ওয়েবসাইট, সিআরএম বা সফটওয়্যারে হাই-স্পিড হোয়াটসঅ্যাপ ও টেলিগ্রাম চেকার ইন্টিগ্রেশনের জন্য অফিশিয়াল API অ্যাক্সেস নিন:\n\n` +
+      `🔹 *REST API Endpoints:*\n` +
+      `▫️ \`GET /api/check-phone?phone=+88017...\` - একক নম্বর ভ্যালিডেশন\n` +
+      `▫️ \`POST /api/check-batch\` - রিয়েল-টাইম বাল্ক মাল্টি-থ্রেড চেকার\n` +
+      `▫️ \`POST /api/send-message\` - স্বয়ংক্রিয় মেসেজিং সুবিধা\n\n` +
+      `💎 *API ফিচারসমূহ:*\n` +
+      `▫️ হোয়াটসঅ্যাপ ও টেলিগ্রাম উভয় প্ল্যাটফর্ম সাপোর্ট\n` +
+      `▫️ আনলিমিটেড হাই-স্পিড রিকোয়েস্ট\n` +
+      `▫️ 99.9% আপটাইম মাল্টি-গেটওয়ে রিডানড্যান্সি\n` +
+      `▫️ ফুল টেলিগ্রাম ও ওয়েবহুক নোটিফিকেশন\n\n` +
+      `📞 *API কী এবং লাইসেন্স ক্রয়ের জন্য:* অ্যাডমিনের সাথে সরাসরি যোগাযোগ করুন।`;
+    await sendTelegramMessage(chatId, buyApiMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
 
@@ -651,26 +1146,60 @@ export async function handleTelegramMessage(message) {
       `*কিভাবে ব্যবহার করবেন:*\n` +
       `▫️ \`CONNECT WS CHECKER\` - হোয়াটসঅ্যাপ অ্যাকাউন্ট যুক্ত করার নিয়মাবলী\n` +
       `▫️ \`CHECK WS NUMBER\` - নম্বর ফিল্টার ও ভেরিফিকেশন করার গাইড\n` +
+      `▫️ \`BUY WS AND TG API\` - এপিআই অ্যাক্সেস ও ডকুমেন্টেশন\n` +
+      `▫️ \`MY PROFILE\` - আপনার টেলিগ্রাম আইডি ও অ্যাকাউন্টের তথ্য\n` +
+      `▫️ \`MY PACKAGE\` - বর্তমান প্যাকেজ ও লিমিট\n` +
       `▫️ \`/login <ফোন নম্বর>\` - পেয়ারিং কোড দিয়ে হোয়াটসঅ্যাপ লিঙ্ক করুন\n` +
       `▫️ \`/check <ফোন নম্বর>\` - নম্বর চেক করুন\n` +
       `▫️ \`/status\` - লিঙ্ককৃত অ্যাকাউন্টের বর্তমান অবস্থা দেখুন\n` +
       `▫️ \`/logout <ফোন নম্বর>\` - অ্যাকাউন্ট মুছে ফেলুন\n` +
       `▫️ ফাইল সেন্ড করুন - আনলিমিটেড বাল্ক নম্বর একসাথে চেক করার জন্য`;
-    await sendTelegramMessage(chatId, helpMsg, "Markdown", MAIN_MENU_KB);
+    await sendTelegramMessage(chatId, helpMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
 
-  if (text === "ADMIN PANEL" || text.includes("ADMIN PANEL")) {
+  if (text === "MY PROFILE" || text.includes("MY PROFILE")) {
     const accounts = getSavedAccountsList();
-    const adminMsg = 
-      `⚙️ *ADMIN PANEL*\n\n` +
-      `স্বাগতম অ্যাডমিন প্যানেলে।\n\n` +
-      `📊 *বর্তমান সিস্টেম অবস্থা:*\n` +
-      `▫️ একটিভ গেটওয়ে: ${currentActivePhone ? `🟢 +${currentActivePhone}` : "🔴 কোনো সক্রিয় অ্যাকাউন্ট নেই"}\n` +
-      `▫️ মোট সংরক্ষিত অ্যাকাউন্ট: ${accounts.length} টি\n` +
-      `▫️ টেলিগ্রাম বট: 🟢 অনলাইন (@LinkViral_Xbot)\n\n` +
-      `বিস্তারিত অ্যাডমিন কনফিগারেশন শীঘ্রই যোগ করা হচ্ছে।`;
-    await sendTelegramMessage(chatId, adminMsg, "Markdown", MAIN_MENU_KB);
+    const userFirstName = message.from?.first_name || message.chat?.first_name || "Telegram User";
+    const userLastName = message.from?.last_name || "";
+    const fullName = `${userFirstName} ${userLastName}`.trim();
+    const username = message.from?.username ? `@${message.from.username}` : "Not Set";
+    const userAccounts = accounts.filter((a) => a.addedByChatId === chatId);
+
+    const profileMsg = 
+      `👤 *MY PROFILE (ব্যবহারকারী প্রোফাইল)*\n\n` +
+      `▫️ *নাম:* ${fullName}\n` +
+      `▫️ *ইউজারনেম:* ${username}\n` +
+      `▫️ *টেলিগ্রাম আইডি:* \`${chatId}\`\n` +
+      `▫️ *লিঙ্ককৃত হোয়াটসঅ্যাপ অ্যাকাউন্ট:* ${userAccounts.length > 0 ? userAccounts.length + " টি" : accounts.length + " টি (সিস্টেম শেয়ার্ড)"}\n` +
+      `▫️ *সক্রিয় গেটওয়ে:* ${currentActivePhone ? `🟢 +${currentActivePhone}` : "🔴 কোনো গেটওয়ে সক্রিয় নেই"}\n` +
+      `▫️ *অ্যাকাউন্ট স্ট্যাটাস:* 🟢 Active Verified User\n` +
+      `▫️ *সার্ভার কানেকশন:* ⚡ Online Multi-Node`;
+    await sendTelegramMessage(chatId, profileMsg, "Markdown", getMainMenuKeyboard(chatId));
+    return;
+  }
+
+  if (text === "MY PACKAGE" || text.includes("MY PACKAGE")) {
+    const pkgMsg = 
+      `📦 *MY PACKAGE (বর্তমান প্যাকেজ বিবরণ)*\n\n` +
+      `▫️ *প্যাকেজ নাম:* 🌟 Premium Starter Tier (সক্রিয়)\n` +
+      `▫️ *দৈনিক চেক লিমিট:* 500 টি / দিন (আনলিমিটেড সিঙ্গেল চেক)\n` +
+      `▫️ *বাল্ক ফাইল সাইজ:* 10,000 নম্বর প্রতি ব্যাচে\n` +
+      `▫️ *চেকিং স্পিড:* ⚡ আল্ট্রা ফাস্ট (0.2s - 0.5s/number)\n` +
+      `▫️ *API অ্যাক্সেস:* স্ট্যান্ডার্ড ইন্টিগ্রেশন এনাবল্ড\n` +
+      `▫️ *মেয়াদ:* ♾️ Lifetime Active\n\n` +
+      `💡 আনলিমিটেড এন্টারপ্রাইজ প্যাকেজে আপগ্রেড করতে মেনুর *BUY WS AND TG API* বাটন চাপুন।`;
+    await sendTelegramMessage(chatId, pkgMsg, "Markdown", getMainMenuKeyboard(chatId));
+    return;
+  }
+
+  if (text === "ADMIN PANEL" || text.includes("ADMIN PANEL") || text === "/admin" || text.startsWith("/admin")) {
+    if (String(chatId) !== ADMIN_CHAT_ID) {
+      await sendTelegramMessage(chatId, `⛔ *অ্যাক্সেস ডিনাইড:* অ্যাডমিন প্যানেল শুধুমাত্র নির্দিষ্ট অ্যাডমিনের (ID: \`${ADMIN_CHAT_ID}\`) জন্য উন্মুক্ত।`, "Markdown", getMainMenuKeyboard(chatId));
+      return;
+    }
+    const adminMsg = getAdminPanelDashboardText();
+    await sendTelegramMessage(chatId, adminMsg, "HTML", ADMIN_PANEL_KEYBOARD);
     return;
   }
 
@@ -833,6 +1362,9 @@ export async function startTelegramPolling() {
           offset = Math.max(offset, update.update_id + 1);
           if (update.message) {
             handleTelegramMessage(update.message).catch((e) => console.error("[Telegram Bot] Handler error:", e));
+          }
+          if (update.callback_query) {
+            handleTelegramCallbackQuery(update.callback_query).catch((e) => console.error("[Telegram Bot] Callback error:", e));
           }
         }
       }
