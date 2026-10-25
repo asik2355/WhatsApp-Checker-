@@ -16,11 +16,111 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion
 } from "@whiskeysockets/baileys";
+import { TelegramClient, Api } from "telegram";
+import { StringSession } from "telegram/sessions/index.js";
 
 // --- CONFIGURATION ---
 export const TG_TOKEN = process.env.TG_TOKEN || "8847916537:AAFC_L4RgUgO_molInYI0FKhgpmVElhwFHY";
 export const TG_API_URL = `https://api.telegram.org/bot${TG_TOKEN}`;
 export const DB_FILE = path.join(process.cwd(), "db_accounts.json");
+export const TG_DB_FILE = path.join(process.cwd(), "db_telegram_accounts.json");
+export const TG_API_ID = Number(process.env.TELEGRAM_API_ID || "2040");
+export const TG_API_HASH = process.env.TELEGRAM_API_HASH || "b18441a1fff1153b5436ca404d41255e";
+
+export const activeTgSessions = new Map();
+export const adminTgWizard = new Map();
+
+export function getSavedTgAccountsList() {
+  if (!fs.existsSync(TG_DB_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(TG_DB_FILE, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+export function saveTgAccountToDb(phone, name, username, session, apiId = TG_API_ID, apiHash = TG_API_HASH) {
+  const accounts = getSavedTgAccountsList();
+  const idx = accounts.findIndex((a) => a.phone === phone);
+  if (idx > -1) {
+    accounts[idx].name = name;
+    accounts[idx].username = username;
+    accounts[idx].session = session;
+    accounts[idx].apiId = apiId;
+    accounts[idx].apiHash = apiHash;
+    accounts[idx].linkedAt = new Date().toISOString();
+    accounts[idx].status = "connected";
+  } else {
+    accounts.push({
+      phone,
+      name,
+      username,
+      session,
+      apiId,
+      apiHash,
+      linkedAt: new Date().toISOString(),
+      status: "connected"
+    });
+  }
+  try {
+    fs.writeFileSync(TG_DB_FILE, JSON.stringify(accounts, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[DB TG] Save error:", e);
+  }
+}
+
+export async function getActiveTgClient(phone) {
+  const existing = activeTgSessions.get(phone);
+  if (existing && existing.client && existing.client.connected) {
+    return existing.client;
+  }
+  const accounts = getSavedTgAccountsList();
+  const acc = accounts.find((a) => a.phone === phone);
+  if (!acc || !acc.session) {
+    throw new Error(`Telegram session not found for +${phone}`);
+  }
+  const useApiId = Number(acc.apiId) || TG_API_ID;
+  const useApiHash = acc.apiHash || TG_API_HASH;
+  const client = new TelegramClient(new StringSession(acc.session), useApiId, useApiHash, {
+    connectionRetries: 3
+  });
+  await client.connect();
+  activeTgSessions.set(phone, { client, status: "connected" });
+  return client;
+}
+
+export function updateTgAccountCredentialsInDb(phone, newApiId, newApiHash) {
+  const accounts = getSavedTgAccountsList();
+  const idx = accounts.findIndex((a) => a.phone === phone);
+  if (idx === -1) return null;
+  if (newApiId !== undefined) accounts[idx].apiId = newApiId;
+  if (newApiHash !== undefined) accounts[idx].apiHash = newApiHash;
+  try {
+    fs.writeFileSync(TG_DB_FILE, JSON.stringify(accounts, null, 2), "utf-8");
+  } catch (e) {}
+  const existing = activeTgSessions.get(phone);
+  if (existing?.client) {
+    try { existing.client.disconnect(); } catch {}
+    activeTgSessions.delete(phone);
+  }
+  getActiveTgClient(phone).catch(() => {});
+  return accounts[idx];
+}
+
+export function deleteTgAccountFromDb(phone) {
+  const session = activeTgSessions.get(phone);
+  if (session?.client) {
+    try { session.client.disconnect(); } catch {}
+  }
+  activeTgSessions.delete(phone);
+  const accounts = getSavedTgAccountsList();
+  const filtered = accounts.filter((a) => a.phone !== phone);
+  const existed = accounts.length !== filtered.length;
+  try {
+    fs.writeFileSync(TG_DB_FILE, JSON.stringify(filtered, null, 2), "utf-8");
+  } catch (e) {}
+  return existed;
+}
 
 // ==========================================
 // Premium Emoji Database & Utilities (All-in-One)
@@ -681,7 +781,7 @@ export const PREMIUM_MANAGEMENT_KEYBOARD = {
       {
         text: "𝗧𝗚 𝗖𝗛𝗘𝗖𝗞𝗘𝗥",
         icon_custom_emoji_id: "5429136513831057777",
-        callback_data: "dummy_alert",
+        callback_data: "tg_checker_menu",
         style: "success"
       }
     ],
@@ -703,6 +803,126 @@ export const PREMIUM_MANAGEMENT_KEYBOARD = {
     ]
   ]
 };
+
+export function getTgCheckerMenuKeyboard() {
+  const accounts = getSavedTgAccountsList();
+  const rows = [
+    [
+      {
+        text: "𝗔𝗗𝗗 𝗧𝗘𝗟𝗘𝗚𝗥𝗔𝗠 𝗔𝗖𝗖𝗢𝗨𝗡𝗧",
+        icon_custom_emoji_id: "5420323438508155202",
+        callback_data: "add_tg_account_start",
+        style: "primary"
+      }
+    ]
+  ];
+
+  for (const acc of accounts) {
+    rows.push([
+      {
+        text: `+${acc.phone}`,
+        icon_custom_emoji_id: "5429136513831057777",
+        callback_data: `tg_acc_view_${acc.phone}`,
+        style: "success"
+      }
+    ]);
+  }
+
+  rows.push([
+    {
+      text: "Back",
+      icon_custom_emoji_id: "5267490665117275176",
+      callback_data: "premium_management_menu",
+      style: "danger"
+    }
+  ]);
+
+  return { inline_keyboard: rows };
+}
+
+export function getTgAccountDetailKeyboard(phone) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "Edit Api Id",
+          icon_custom_emoji_id: "5395444784611480792",
+          callback_data: `tg_acc_edit_id_${phone}`,
+          style: "primary"
+        },
+        {
+          text: "Edit Api Hash",
+          icon_custom_emoji_id: "5197288647275071607",
+          callback_data: `tg_acc_edit_hash_${phone}`,
+          style: "primary"
+        }
+      ],
+      [
+        {
+          text: "Delete Season",
+          icon_custom_emoji_id: "5796499549287615611",
+          callback_data: `tg_acc_del_${phone}`,
+          style: "danger"
+        }
+      ],
+      [
+        {
+          text: "Back",
+          icon_custom_emoji_id: "5267490665117275176",
+          callback_data: "tg_checker_menu",
+          style: "danger"
+        }
+      ]
+    ]
+  };
+}
+
+export function getTgCheckerDashboardText() {
+  const accounts = getSavedTgAccountsList();
+  let text =
+    `📱 <b>TELEGRAM CHECKER ACCOUNT MANAGEMENT</b>\n\n` +
+    `🌐 Connect your Telegram account using <b>API ID</b> and <b>API Hash</b> from <a href="https://my.telegram.org">http://my.telegram.org</a> to enable high-speed Telegram number checking.\n\n` +
+    `📊 <b>Connected Sessions (${accounts.length}):</b>\n`;
+
+  if (accounts.length === 0) {
+    text += `▫️ <i>No Telegram accounts logged in yet. Click <b>ADD TELEGRAM ACCOUNT</b> below to log in.</i>\n`;
+  } else {
+    accounts.forEach((acc, idx) => {
+      const active = activeTgSessions.get(acc.phone);
+      const isOnline = active && active.client && active.client.connected;
+      const statusBadge = isOnline ? "🟢 Active Session" : "🟡 Saved Session";
+      const uname = acc.username ? ` (@${acc.username.replace(/^@/, "")})` : "";
+      text += `${idx + 1}. <b>+${acc.phone}</b> — ${acc.name || "User"}${uname}\n   ▫️ API ID: <code>${acc.apiId || TG_API_ID}</code> | ${statusBadge}\n`;
+    });
+    text += `\n👇 <i>Click on any phone number button below to manage its API ID, API Hash, or Delete Session:</i>`;
+  }
+
+  return text;
+}
+
+export function getTgAccountDetailText(phone) {
+  const accounts = getSavedTgAccountsList();
+  const acc = accounts.find((a) => a.phone === phone);
+  if (!acc) {
+    return `⚠️ <b>Account +${phone} not found in database.</b>`;
+  }
+  const active = activeTgSessions.get(acc.phone);
+  const isOnline = active && active.client && active.client.connected;
+  const useApiId = acc.apiId || TG_API_ID;
+  const useApiHash = acc.apiHash || TG_API_HASH;
+
+  return (
+    `📱 <b>TELEGRAM ACCOUNT DETAILS</b>\n\n` +
+    `▫️ <b>Phone Number:</b> <code>+${acc.phone}</code>\n` +
+    `▫️ <b>Account Name:</b> ${acc.name || "Telegram User"}\n` +
+    `▫️ <b>Username:</b> ${acc.username ? `@${acc.username.replace(/^@/, "")}` : "Not Set"}\n` +
+    `▫️ <b>API ID:</b> <code>${useApiId}</code>\n` +
+    `▫️ <b>API Hash:</b> <code>${useApiHash}</code>\n` +
+    `▫️ <b>Session Status:</b> ${isOnline ? "🟢 Connected & Ready" : "🟡 Saved (Auto-Reconnect)"}\n` +
+    `▫️ <b>Linked At:</b> <code>${new Date(acc.linkedAt).toLocaleString()}</code>\n\n` +
+    `👇 Select an action below:`
+  );
+}
 
 export const MANAGE_PACKAGE_KEYBOARD = {
   inline_keyboard: [
@@ -1209,9 +1429,12 @@ export async function handleTelegramCallbackQuery(call) {
     "manage_package_menu",
     "payment_management_menu",
     "deposit_method_menu",
-    "dollar_rate_menu"
+    "dollar_rate_menu",
+    "tg_checker_menu",
+    "add_tg_account_start"
   ];
-  if (adminCallbacks.includes(data)) {
+  const isTgAdminAction = adminCallbacks.includes(data) || data.startsWith("tg_acc_");
+  if (isTgAdminAction) {
     if (String(fromId) !== ADMIN_CHAT_ID && String(chatId) !== ADMIN_CHAT_ID) {
       await answerTelegramCallbackQuery(callId, "⛔ Access Denied: You are not an administrator of this system!", true);
       return;
@@ -1219,6 +1442,7 @@ export async function handleTelegramCallbackQuery(call) {
   }
 
   if (data === "system_settings") {
+    adminTgWizard.delete(String(chatId));
     const text = `⚙️ <b>SYSTEM SETTINGS</b>\n\nSelect a configuration menu below:`;
     if (msgId) {
       await editTelegramMessage(chatId, msgId, text, "HTML", SETTINGS_MENU_KEYBOARD);
@@ -1230,6 +1454,7 @@ export async function handleTelegramCallbackQuery(call) {
   }
 
   if (data === "premium_management_menu") {
+    adminTgWizard.delete(String(chatId));
     const text = `💎 <b>PREMIUM MANAGEMENT</b>\n\nConfigure premium features and checkers below:`;
     if (msgId) {
       await editTelegramMessage(chatId, msgId, text, "HTML", PREMIUM_MANAGEMENT_KEYBOARD);
@@ -1237,6 +1462,137 @@ export async function handleTelegramCallbackQuery(call) {
       await sendTelegramMessage(chatId, text, "HTML", PREMIUM_MANAGEMENT_KEYBOARD);
     }
     await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data === "tg_checker_menu") {
+    const existingWiz = adminTgWizard.get(String(chatId));
+    if (existingWiz?.client) {
+      try { existingWiz.client.disconnect(); } catch {}
+    }
+    adminTgWizard.delete(String(chatId));
+    const text = getTgCheckerDashboardText();
+    const kb = getTgCheckerMenuKeyboard();
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", kb);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", kb);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data === "add_tg_account_start") {
+    adminTgWizard.set(String(chatId), { step: "await_api_id" });
+    const text =
+      `➕ <b>ADD TELEGRAM ACCOUNT (Step 1/4)</b>\n\n` +
+      `🌐 Log in to <a href="https://my.telegram.org">http://my.telegram.org</a> ➔ <b>API development tools</b> to get your credentials.\n\n` +
+      `🔢 Please send your <b>API ID</b> in the chat (e.g. <code>2040</code> or <code>25481920</code>):`;
+    const cancelKb = {
+      inline_keyboard: [
+        [
+          {
+            text: "Back",
+            icon_custom_emoji_id: "5267490665117275176",
+            callback_data: "tg_checker_menu",
+            style: "danger"
+          }
+        ]
+      ]
+    };
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", cancelKb);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", cancelKb);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data.startsWith("tg_acc_view_")) {
+    const phone = data.replace("tg_acc_view_", "").trim();
+    adminTgWizard.delete(String(chatId));
+    const text = getTgAccountDetailText(phone);
+    const kb = getTgAccountDetailKeyboard(phone);
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", kb);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", kb);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data.startsWith("tg_acc_edit_id_")) {
+    const phone = data.replace("tg_acc_edit_id_", "").trim();
+    const acc = getSavedTgAccountsList().find((a) => a.phone === phone);
+    adminTgWizard.set(String(chatId), { step: "edit_api_id", targetPhone: phone });
+    const text =
+      `✏️ <b>EDIT API ID (+${phone})</b>\n\n` +
+      `▫️ <b>Current API ID:</b> <code>${acc?.apiId || TG_API_ID}</code>\n\n` +
+      `👉 Please send the new <b>API ID</b> from <a href="https://my.telegram.org">http://my.telegram.org</a> in the chat:`;
+    const backKb = {
+      inline_keyboard: [
+        [
+          {
+            text: "Back",
+            icon_custom_emoji_id: "5267490665117275176",
+            callback_data: `tg_acc_view_${phone}`,
+            style: "danger"
+          }
+        ]
+      ]
+    };
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", backKb);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", backKb);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data.startsWith("tg_acc_edit_hash_")) {
+    const phone = data.replace("tg_acc_edit_hash_", "").trim();
+    const acc = getSavedTgAccountsList().find((a) => a.phone === phone);
+    adminTgWizard.set(String(chatId), { step: "edit_api_hash", targetPhone: phone });
+    const text =
+      `🔑 <b>EDIT API HASH (+${phone})</b>\n\n` +
+      `▫️ <b>Current API Hash:</b> <code>${acc?.apiHash || TG_API_HASH}</code>\n\n` +
+      `👉 Please send the new <b>API Hash</b> from <a href="https://my.telegram.org">http://my.telegram.org</a> in the chat:`;
+    const backKb = {
+      inline_keyboard: [
+        [
+          {
+            text: "Back",
+            icon_custom_emoji_id: "5267490665117275176",
+            callback_data: `tg_acc_view_${phone}`,
+            style: "danger"
+          }
+        ]
+      ]
+    };
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", backKb);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", backKb);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data.startsWith("tg_acc_del_")) {
+    const phone = data.replace("tg_acc_del_", "").trim();
+    adminTgWizard.delete(String(chatId));
+    deleteTgAccountFromDb(phone);
+    await answerTelegramCallbackQuery(callId, `🗑 Session for +${phone} deleted successfully!`, true);
+    const text = getTgCheckerDashboardText();
+    const kb = getTgCheckerMenuKeyboard();
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", kb);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", kb);
+    }
     return;
   }
 
@@ -1273,6 +1629,7 @@ export async function handleTelegramCallbackQuery(call) {
   }
 
   if (data === "admin_panel_home") {
+    adminTgWizard.delete(String(chatId));
     const text = getAdminPanelDashboardText();
     if (msgId) {
       await editTelegramMessage(chatId, msgId, text, "HTML", ADMIN_PANEL_KEYBOARD);
@@ -1747,7 +2104,11 @@ export async function handleTelegramDocument(chatId, doc) {
     const matches = fileText.match(/(\+?[0-9]{8,15})/g);
 
     if (matches && matches.length > 0) {
-      await checkAndRespondBatch(chatId, matches);
+      if (userMenuMode.get(String(chatId)) === "check_tg") {
+        await checkAndRespondTgBatch(chatId, matches);
+      } else {
+        await checkAndRespondBatch(chatId, matches);
+      }
     } else {
       await sendTelegramMessage(chatId, "⚠️ No valid 8 to 15-digit mobile numbers found in this file. Please upload a valid .txt or .csv file.");
     }
@@ -2129,6 +2490,250 @@ export async function handleTelegramMessage(message) {
     return;
   }
 
+  // HANDLE ADMIN TG CHECKER WIZARD (Add Telegram Account / Edit API ID / Edit API Hash)
+  const wiz = adminTgWizard.get(chatKey);
+  if (wiz && String(chatId) === ADMIN_CHAT_ID) {
+    const cancelWizKb = {
+      inline_keyboard: [
+        [
+          {
+            text: "Back",
+            icon_custom_emoji_id: "5267490665117275176",
+            callback_data: wiz.targetPhone ? `tg_acc_view_${wiz.targetPhone}` : "tg_checker_menu",
+            style: "danger"
+          }
+        ]
+      ]
+    };
+
+    if (wiz.step === "edit_api_id" && wiz.targetPhone) {
+      const parsedId = Number(text.replace(/\D/g, ""));
+      if (!parsedId || isNaN(parsedId) || parsedId < 100) {
+        await sendTelegramMessage(chatId, "⚠️ Invalid API ID. Please send a valid numeric API ID (e.g. `2040` or `25481920`).", "Markdown", cancelWizKb);
+        return;
+      }
+      updateTgAccountCredentialsInDb(wiz.targetPhone, parsedId, undefined);
+      adminTgWizard.delete(chatKey);
+      await sendTelegramMessage(
+        chatId,
+        `✅ <b>API ID Updated Successfully!</b>\n\n` + getTgAccountDetailText(wiz.targetPhone),
+        "HTML",
+        getTgAccountDetailKeyboard(wiz.targetPhone)
+      );
+      return;
+    }
+
+    if (wiz.step === "edit_api_hash" && wiz.targetPhone) {
+      const cleanHash = text.trim();
+      if (cleanHash.length < 10) {
+        await sendTelegramMessage(chatId, "⚠️ Invalid API Hash. Please send a valid API Hash string from http://my.telegram.org.", "Markdown", cancelWizKb);
+        return;
+      }
+      updateTgAccountCredentialsInDb(wiz.targetPhone, undefined, cleanHash);
+      adminTgWizard.delete(chatKey);
+      await sendTelegramMessage(
+        chatId,
+        `✅ <b>API Hash Updated Successfully!</b>\n\n` + getTgAccountDetailText(wiz.targetPhone),
+        "HTML",
+        getTgAccountDetailKeyboard(wiz.targetPhone)
+      );
+      return;
+    }
+
+    if (wiz.step === "await_api_id") {
+      const parsedId = Number(text.replace(/\D/g, ""));
+      if (!parsedId || isNaN(parsedId) || parsedId < 100) {
+        await sendTelegramMessage(chatId, "⚠️ Invalid API ID. Please send your numeric <b>API ID</b> from <a href=\"https://my.telegram.org\">http://my.telegram.org</a>:", "HTML", cancelWizKb);
+        return;
+      }
+      wiz.apiId = parsedId;
+      wiz.step = "await_api_hash";
+      adminTgWizard.set(chatKey, wiz);
+      await sendTelegramMessage(
+        chatId,
+        `🔑 <b>ADD TELEGRAM ACCOUNT (Step 2/4)</b>\n\n` +
+        `✅ <b>API ID Saved:</b> <code>${parsedId}</code>\n\n` +
+        `Now please send your <b>API Hash</b> from <a href="https://my.telegram.org">http://my.telegram.org</a>:`,
+        "HTML",
+        cancelWizKb
+      );
+      return;
+    }
+
+    if (wiz.step === "await_api_hash") {
+      const cleanHash = text.trim();
+      if (cleanHash.length < 10) {
+        await sendTelegramMessage(chatId, "⚠️ Invalid API Hash. Please send your 32-character <b>API Hash</b> from <a href=\"https://my.telegram.org\">http://my.telegram.org</a>:", "HTML", cancelWizKb);
+        return;
+      }
+      wiz.apiHash = cleanHash;
+      wiz.step = "await_phone";
+      adminTgWizard.set(chatKey, wiz);
+      await sendTelegramMessage(
+        chatId,
+        `📱 <b>ADD TELEGRAM ACCOUNT (Step 3/4)</b>\n\n` +
+        `✅ <b>API ID:</b> <code>${wiz.apiId}</code>\n` +
+        `✅ <b>API Hash:</b> <code>${cleanHash.substring(0, 8)}...</code>\n\n` +
+        `Now send the <b>Telegram Phone Number</b> with country code (e.g. <code>8801712345678</code>):`,
+        "HTML",
+        cancelWizKb
+      );
+      return;
+    }
+
+    if (wiz.step === "await_phone") {
+      const cleanPhone = normalizePhone(text);
+      if (!cleanPhone || cleanPhone.length < 8) {
+        await sendTelegramMessage(chatId, "⚠️ Invalid phone number. Please send a valid phone number with country code (e.g. <code>8801712345678</code>):", "HTML", cancelWizKb);
+        return;
+      }
+      await sendTelegramMessage(chatId, `⏳ Connecting to Telegram servers and requesting login code for <b>+${cleanPhone}</b>...`, "HTML");
+      try {
+        const useApiId = wiz.apiId || TG_API_ID;
+        const useApiHash = wiz.apiHash || TG_API_HASH;
+        const client = new TelegramClient(new StringSession(""), useApiId, useApiHash, {
+          connectionRetries: 3
+        });
+        await client.connect();
+        const { phoneCodeHash } = await client.sendCode(
+          { apiId: useApiId, apiHash: useApiHash },
+          "+" + cleanPhone
+        );
+        wiz.phone = cleanPhone;
+        wiz.phoneCodeHash = phoneCodeHash;
+        wiz.client = client;
+        wiz.step = "await_otp";
+        adminTgWizard.set(chatKey, wiz);
+
+        await sendTelegramMessage(
+          chatId,
+          `📩 <b>ADD TELEGRAM ACCOUNT (Step 4/4 - Verification Code)</b>\n\n` +
+          `A login code (OTP) has been sent to your Telegram account <b>+${cleanPhone}</b>!\n\n` +
+          `👉 Please send the <b>5-digit Login Code (OTP)</b> here:\n` +
+          `<i>(Tip: Send it with spaces like <code>1 2 3 4 5</code> so Telegram does not block the login code)</i>`,
+          "HTML",
+          cancelWizKb
+        );
+      } catch (err) {
+        console.error("[TG Checker Login] sendCode error:", err);
+        await sendTelegramMessage(
+          chatId,
+          `❌ <b>Failed to send verification code:</b>\n<code>${err?.message || err}</code>\n\nPlease verify your API ID, API Hash, and Phone Number, or tap <b>Back</b>.`,
+          "HTML",
+          cancelWizKb
+        );
+      }
+      return;
+    }
+
+    if (wiz.step === "await_otp") {
+      const cleanCode = text.replace(/\D/g, "");
+      if (!cleanCode || cleanCode.length < 4) {
+        await sendTelegramMessage(chatId, "⚠️ Please send the valid 5-digit OTP code (e.g. <code>1 2 3 4 5</code>):", "HTML", cancelWizKb);
+        return;
+      }
+      try {
+        await wiz.client.invoke(
+          new Api.auth.SignIn({
+            phoneNumber: "+" + wiz.phone,
+            phoneCodeHash: wiz.phoneCodeHash,
+            phoneCode: cleanCode
+          })
+        );
+        const me = await wiz.client.getMe();
+        const sessionStr = String(wiz.client.session.save());
+        saveTgAccountToDb(
+          wiz.phone,
+          me?.firstName || "Telegram User",
+          me?.username || "",
+          sessionStr,
+          wiz.apiId || TG_API_ID,
+          wiz.apiHash || TG_API_HASH
+        );
+        activeTgSessions.set(wiz.phone, { client: wiz.client, status: "connected" });
+        adminTgWizard.delete(chatKey);
+
+        await sendTelegramMessage(
+          chatId,
+          `🎉 <b>Telegram Account Logged In Successfully!</b>\n\n` +
+          `▫️ <b>Phone:</b> <code>+${wiz.phone}</code>\n` +
+          `▫️ <b>Name:</b> ${me?.firstName || "Telegram User"}\n` +
+          `▫️ <b>API ID:</b> <code>${wiz.apiId}</code>\n\n` +
+          getTgCheckerDashboardText(),
+          "HTML",
+          getTgCheckerMenuKeyboard()
+        );
+      } catch (err) {
+        const errMsg = String(err?.errorMessage || err?.message || err);
+        if (errMsg.includes("SESSION_PASSWORD_NEEDED")) {
+          wiz.step = "await_2fa";
+          adminTgWizard.set(chatKey, wiz);
+          await sendTelegramMessage(
+            chatId,
+            `🔐 <b>Two-Step Verification (2FA) Required</b>\n\n` +
+            `This Telegram account has a 2FA Cloud Password enabled.\n` +
+            `👉 Please send your <b>2FA Password</b> to complete login:`,
+            "HTML",
+            cancelWizKb
+          );
+          return;
+        }
+        console.error("[TG Checker Login] OTP signIn error:", err);
+        await sendTelegramMessage(
+          chatId,
+          `❌ <b>Login Failed:</b> <code>${errMsg}</code>\n\nPlease send the correct OTP code or tap <b>Back</b>.`,
+          "HTML",
+          cancelWizKb
+        );
+      }
+      return;
+    }
+
+    if (wiz.step === "await_2fa") {
+      try {
+        await wiz.client.signInWithPassword(
+          { apiId: wiz.apiId || TG_API_ID, apiHash: wiz.apiHash || TG_API_HASH },
+          {
+            password: async () => text.trim(),
+            onError: (e) => { throw e; }
+          }
+        );
+        const me = await wiz.client.getMe();
+        const sessionStr = String(wiz.client.session.save());
+        saveTgAccountToDb(
+          wiz.phone,
+          me?.firstName || "Telegram User",
+          me?.username || "",
+          sessionStr,
+          wiz.apiId || TG_API_ID,
+          wiz.apiHash || TG_API_HASH
+        );
+        activeTgSessions.set(wiz.phone, { client: wiz.client, status: "connected" });
+        adminTgWizard.delete(chatKey);
+
+        await sendTelegramMessage(
+          chatId,
+          `🎉 <b>Telegram Account Logged In Successfully (2FA Verified)!</b>\n\n` +
+          `▫️ <b>Phone:</b> <code>+${wiz.phone}</code>\n` +
+          `▫️ <b>Name:</b> ${me?.firstName || "Telegram User"}\n` +
+          `▫️ <b>API ID:</b> <code>${wiz.apiId}</code>\n\n` +
+          getTgCheckerDashboardText(),
+          "HTML",
+          getTgCheckerMenuKeyboard()
+        );
+      } catch (err) {
+        console.error("[TG Checker Login] 2FA error:", err);
+        await sendTelegramMessage(
+          chatId,
+          `❌ <b>2FA Password Incorrect or Failed:</b> <code>${err?.message || err}</code>\n\nPlease try sending your 2FA password again or tap <b>Back</b>.`,
+          "HTML",
+          cancelWizKb
+        );
+      }
+      return;
+    }
+  }
+
   // HANDLE DIRECT PHONE NUMBER INPUT BASED ON ACTIVE MENU MODE
   const activeMode = userMenuMode.get(chatKey);
   const numMatches = text.match(/(\+?[0-9]{8,15})/g);
@@ -2149,7 +2754,11 @@ export async function handleTelegramMessage(message) {
   }
 
   if (numMatches && numMatches.length > 0) {
-    await checkAndRespondBatch(chatId, numMatches);
+    if (activeMode === "check_tg") {
+      await checkAndRespondTgBatch(chatId, numMatches);
+    } else {
+      await checkAndRespondBatch(chatId, numMatches);
+    }
   } else {
     if (activeMode === "check_ws" || activeMode === "check_tg") {
       await sendTelegramMessage(
@@ -2165,6 +2774,160 @@ export async function handleTelegramMessage(message) {
         "Markdown",
         getMainMenuKeyboard(chatId)
       );
+    }
+  }
+}
+
+export async function checkAndRespondTgBatch(chatId, rawNumbers) {
+  const tgAccounts = getSavedTgAccountsList();
+  let senderPhone = "";
+  for (const [ph, sess] of activeTgSessions.entries()) {
+    if (sess && sess.client && sess.client.connected) {
+      senderPhone = ph;
+      break;
+    }
+  }
+  if (!senderPhone && tgAccounts.length > 0) {
+    senderPhone = tgAccounts[0].phone;
+  }
+
+  if (!senderPhone) {
+    await sendTelegramMessage(
+      chatId,
+      "⚠️ *No active Telegram Checker account connected!*\n\nPlease log in a Telegram account first via *ADMIN PANEL ➔ SETTINGS ➔ PREMIUM MANAGEMENT ➔ TG CHECKER ➔ ADD TELEGRAM ACCOUNT*.",
+      "Markdown",
+      BACK_MENU_KB
+    );
+    return;
+  }
+
+  const normalizedList = [];
+  const seen = new Set();
+  for (const num of rawNumbers) {
+    const clean = normalizePhone(num);
+    if (!clean || clean.length < 6) continue;
+    if (seen.has(clean)) continue;
+    seen.add(clean);
+    normalizedList.push(clean);
+  }
+
+  if (normalizedList.length === 0) {
+    await sendTelegramMessage(chatId, "⚠️ No valid phone numbers found. Please provide valid numbers with country codes.", "Markdown", BACK_MENU_KB);
+    return;
+  }
+
+  let client;
+  try {
+    client = await getActiveTgClient(senderPhone);
+  } catch (err) {
+    await sendTelegramMessage(
+      chatId,
+      `❌ Failed to connect Telegram Checker gateway (+${senderPhone}): ${err?.message || err}`,
+      "Markdown",
+      BACK_MENU_KB
+    );
+    return;
+  }
+
+  const progressMsgId = await sendTelegramMessage(
+    chatId,
+    `🔍 *Checking Telegram Database...*\n\n` +
+    `Total Unique Numbers: *${normalizedList.length}*\n` +
+    `Active TG Gateway: *+${senderPhone}*`,
+    "Markdown",
+    BACK_MENU_KB
+  );
+
+  const activeTG = [];
+  const inactiveTG = [];
+  const chunkSize = 25;
+
+  for (let i = 0; i < normalizedList.length; i += chunkSize) {
+    const chunk = normalizedList.slice(i, i + chunkSize);
+    const contacts = chunk.map((num, idx) =>
+      new Api.InputPhoneContact({
+        clientId: BigInt(Date.now() + idx),
+        phone: "+" + num,
+        firstName: "TGCheck",
+        lastName: String(idx)
+      })
+    );
+
+    const foundPhones = new Set();
+    const importedUserIds = [];
+
+    try {
+      const result = await client.invoke(new Api.contacts.ImportContacts({ contacts }));
+      if (result && Array.isArray(result.users)) {
+        for (const u of result.users) {
+          if (u.id) importedUserIds.push(u.id);
+          if (u.phone) {
+            foundPhones.add(normalizePhone(String(u.phone)));
+          }
+        }
+      }
+      if (importedUserIds.length > 0) {
+        await client.invoke(new Api.contacts.DeleteContacts({ id: importedUserIds })).catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[TG Bulk Check] Batch import error:", e?.message || e);
+    }
+
+    for (const num of chunk) {
+      if (foundPhones.has(num)) {
+        activeTG.push(num);
+      } else {
+        inactiveTG.push(num);
+      }
+    }
+
+    if (normalizedList.length > 25 && progressMsgId) {
+      const pct = Math.round((Math.min(i + chunkSize, normalizedList.length) / normalizedList.length) * 100);
+      await editTelegramMessage(
+        chatId,
+        progressMsgId,
+        `🔍 *Checking Telegram Database...*\n\n` +
+        `⏳ Progress: *${Math.min(i + chunkSize, normalizedList.length)}/${normalizedList.length}* (*${pct}%*)\n` +
+        `🟢 Active TG: *${activeTG.length}* | 🔴 Inactive: *${inactiveTG.length}*`
+      );
+    }
+  }
+
+  if (normalizedList.length <= 30) {
+    const report =
+      `🤖 *Telegram Checker Report*\n\n` +
+      `📊 *Total Checked:* ${normalizedList.length}\n` +
+      `✅ *Active Telegram Accounts (${activeTG.length}):*\n` +
+      `${activeTG.length > 0 ? activeTG.map((x) => `+${x}`).join("\n") : "_None_"}\n\n` +
+      `❌ *Not on Telegram (${inactiveTG.length}):*\n` +
+      `${inactiveTG.length > 0 ? inactiveTG.map((x) => `+${x}`).join("\n") : "_None_"}`;
+
+    if (progressMsgId) {
+      await editTelegramMessage(chatId, progressMsgId, report);
+    } else {
+      await sendTelegramMessage(chatId, report, "Markdown", BACK_MENU_KB);
+    }
+  } else {
+    const activeText = activeTG.map((x) => `+${x}`).join("\n");
+    const inactiveText = inactiveTG.map((x) => `+${x}`).join("\n");
+    const summary =
+      `🤖 *Bulk Telegram Checker Report*\n\n` +
+      `📊 *Total Checked:* ${normalizedList.length}\n` +
+      `🟢 *Active Telegram Accounts:* ${activeTG.length}\n` +
+      `🔴 *Not on Telegram:* ${inactiveTG.length}\n\n` +
+      `📂 Detailed lists are attached in the text files below.`;
+
+    if (progressMsgId) {
+      await editTelegramMessage(chatId, progressMsgId, summary);
+    } else {
+      await sendTelegramMessage(chatId, summary, "Markdown", BACK_MENU_KB);
+    }
+
+    if (activeTG.length > 0) {
+      await sendTelegramDocument(chatId, activeText, "active_telegram_numbers.txt", `🟢 Active Telegram Numbers (${activeTG.length})`);
+    }
+    if (inactiveTG.length > 0) {
+      await sendTelegramDocument(chatId, inactiveText, "inactive_telegram_numbers.txt", `🔴 Inactive Telegram Numbers (${inactiveTG.length})`);
     }
   }
 }
