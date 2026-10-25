@@ -389,6 +389,136 @@ export function deleteAccountFromDb(phone) {
 // --- TELEGRAM BOT API HELPERS ---
 export const ADMIN_CHAT_ID = "8343010638";
 
+const USERS_DB_FILE = path.join(process.cwd(), "db_bot_users.json");
+
+export function getBotUsersList() {
+  if (!fs.existsSync(USERS_DB_FILE)) {
+    const now = new Date().toISOString();
+    const adminUser = {
+      chatId: Number(ADMIN_CHAT_ID),
+      username: "@Admin",
+      name: "System Administrator",
+      firstSeen: now,
+      lastActive: now,
+      isPremium: true,
+      package: "Enterprise API",
+      grantedAt: now,
+      checksCount: 0
+    };
+    try {
+      fs.writeFileSync(USERS_DB_FILE, JSON.stringify([adminUser], null, 2), "utf-8");
+      return [adminUser];
+    } catch {
+      return [adminUser];
+    }
+  }
+  try {
+    const data = fs.readFileSync(USERS_DB_FILE, "utf-8");
+    const list = JSON.parse(data);
+    if (!list.some(u => String(u.chatId) === ADMIN_CHAT_ID)) {
+      const now = new Date().toISOString();
+      list.push({
+        chatId: Number(ADMIN_CHAT_ID),
+        username: "@Admin",
+        name: "System Administrator",
+        firstSeen: now,
+        lastActive: now,
+        isPremium: true,
+        package: "Enterprise API",
+        grantedAt: now,
+        checksCount: 0
+      });
+      fs.writeFileSync(USERS_DB_FILE, JSON.stringify(list, null, 2), "utf-8");
+    }
+    return list;
+  } catch (e) {
+    console.error("[DB Users] Error reading db_bot_users.json:", e);
+    return [];
+  }
+}
+
+export function saveBotUsersList(users) {
+  try {
+    fs.writeFileSync(USERS_DB_FILE, JSON.stringify(users, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[DB Users] Failed to write db_bot_users.json:", e);
+  }
+}
+
+export function trackBotUser(chatId, fromObj) {
+  const users = getBotUsersList();
+  const existingIdx = users.findIndex(u => u.chatId === chatId);
+  const now = new Date().toISOString();
+  const rawUsername = fromObj?.username ? `@${fromObj.username}` : "";
+  const firstName = fromObj?.first_name || "";
+  const lastName = fromObj?.last_name || "";
+  const composedName = `${firstName} ${lastName}`.trim();
+  const isAdmin = String(chatId) === ADMIN_CHAT_ID;
+
+  if (existingIdx > -1) {
+    users[existingIdx].lastActive = now;
+    if (rawUsername) users[existingIdx].username = rawUsername;
+    if (composedName) users[existingIdx].name = composedName;
+    if (isAdmin) {
+      users[existingIdx].isPremium = true;
+      users[existingIdx].package = "Enterprise API";
+    }
+    saveBotUsersList(users);
+    return users[existingIdx];
+  } else {
+    const newUser = {
+      chatId,
+      username: rawUsername || "Not Set",
+      name: composedName || (isAdmin ? "System Administrator" : `Telegram User ${chatId}`),
+      firstSeen: now,
+      lastActive: now,
+      isPremium: isAdmin,
+      package: isAdmin ? "Enterprise API" : "Free",
+      grantedAt: isAdmin ? now : undefined,
+      checksCount: 0
+    };
+    users.push(newUser);
+    saveBotUsersList(users);
+    return newUser;
+  }
+}
+
+export function setBotUserPackage(targetChatId, isPremium, packageName = "Premium API") {
+  const users = getBotUsersList();
+  let user = users.find(u => u.chatId === targetChatId);
+  const now = new Date().toISOString();
+
+  if (user) {
+    user.isPremium = isPremium;
+    user.package = packageName;
+    user.grantedAt = isPremium ? now : undefined;
+    user.lastActive = now;
+  } else {
+    user = {
+      chatId: targetChatId,
+      username: "Not Set",
+      name: `User ${targetChatId}`,
+      firstSeen: now,
+      lastActive: now,
+      isPremium,
+      package: packageName,
+      grantedAt: isPremium ? now : undefined,
+      checksCount: 0
+    };
+    users.push(user);
+  }
+  saveBotUsersList(users);
+  return user;
+}
+
+export function getUserStats() {
+  const users = getBotUsersList();
+  const totalUsers = users.length;
+  const premiumUsers = users.filter(u => u.isPremium).length;
+  const freeUsers = Math.max(0, totalUsers - premiumUsers);
+  return { totalUsers, premiumUsers, freeUsers };
+}
+
 export function getMainMenuKeyboard(chatId) {
   const rows = [
     [
@@ -454,10 +584,55 @@ export const ADMIN_PANEL_KEYBOARD = {
   inline_keyboard: [
     [
       {
+        text: "👥 USER & PACKAGE ANALYTICS",
+        icon_custom_emoji_id: "5764869872521581153",
+        callback_data: "manage_package_menu",
+        style: "primary"
+      }
+    ],
+    [
+      {
+        text: "💳 PAYMENT MANAGEMENT",
+        icon_custom_emoji_id: "5429452906891880671",
+        callback_data: "payment_management_menu",
+        style: "primary"
+      }
+    ],
+    [
+      {
         text: "⚙️ SETTINGS",
         icon_custom_emoji_id: "5420155432272438703",
         callback_data: "system_settings",
         style: "primary"
+      }
+    ]
+  ]
+};
+
+export const PAYMENT_MANAGEMENT_KEYBOARD = {
+  inline_keyboard: [
+    [
+      {
+        text: "𝗗𝗘𝗣𝗢𝗦𝗜𝗧 𝗠𝗘𝗧𝗛𝗢𝗗",
+        icon_custom_emoji_id: "5440896830072179569",
+        callback_data: "deposit_method_menu",
+        style: "primary"
+      }
+    ],
+    [
+      {
+        text: "𝗗𝗢𝗟𝗟𝗔𝗥 𝗥𝗔𝗧𝗘",
+        icon_custom_emoji_id: "5348469219761626211",
+        callback_data: "dollar_rate_menu",
+        style: "success"
+      }
+    ],
+    [
+      {
+        text: "Back",
+        icon_custom_emoji_id: "5267490665117275176",
+        callback_data: "admin_panel_home",
+        style: "danger"
       }
     ]
   ]
@@ -470,6 +645,14 @@ export const SETTINGS_MENU_KEYBOARD = {
         text: "𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧",
         icon_custom_emoji_id: "5764869872521581153",
         callback_data: "premium_management_menu",
+        style: "primary"
+      }
+    ],
+    [
+      {
+        text: "💳 PAYMENT MANAGEMENT",
+        icon_custom_emoji_id: "5429452906891880671",
+        callback_data: "payment_management_menu",
         style: "primary"
       }
     ],
@@ -490,7 +673,7 @@ export const PREMIUM_MANAGEMENT_KEYBOARD = {
       {
         text: "𝗠𝗔𝗡𝗔𝗚𝗘 𝗣𝗔𝗖𝗞𝗔𝗚𝗘",
         icon_custom_emoji_id: "5123113788979021186",
-        callback_data: "dummy_alert",
+        callback_data: "manage_package_menu",
         style: "primary"
       }
     ],
@@ -521,23 +704,476 @@ export const PREMIUM_MANAGEMENT_KEYBOARD = {
   ]
 };
 
+export const MANAGE_PACKAGE_KEYBOARD = {
+  inline_keyboard: [
+    [
+      {
+        text: "🔄 Refresh Stats",
+        icon_custom_emoji_id: "5429136513831057777",
+        callback_data: "manage_package_menu",
+        style: "primary"
+      }
+    ],
+    [
+      {
+        text: "Back",
+        icon_custom_emoji_id: "5267490665117275176",
+        callback_data: "premium_management_menu",
+        style: "danger"
+      }
+    ]
+  ]
+};
+
+export const BUY_API_INLINE_KEYBOARD = {
+  inline_keyboard: [
+    [
+      {
+        text: "DOWNLOAD API DOCUMENTS",
+        icon_custom_emoji_id: "5352721946054268944",
+        callback_data: "download_api_docs",
+        style: "success"
+      }
+    ]
+  ]
+};
+
+export function generateApiDocumentationContent() {
+  return `================================================================================
+       WHATSAPP & TELEGRAM NUMBER CHECKER API - INTEGRATION GUIDE
+================================================================================
+Generated Date: ${new Date().toISOString()}
+Protocol: HTTPS / REST API
+Output Format: JSON (application/json)
+Authentication: Header "Authorization: Bearer <YOUR_API_KEY>"
+
+================================================================================
+                 PART 1: ENGLISH API DOCUMENTATION & GUIDE
+================================================================================
+
+--------------------------------------------------------------------------------
+1. OVERVIEW & ARCHITECTURE
+--------------------------------------------------------------------------------
+This enterprise REST API provides high-speed phone number validation and presence 
+checking across WhatsApp Web servers and Telegram networks.
+Features:
+- Single & Multi-threaded Bulk Validation
+- Real-time WhatsApp JID resolution (JID: <phone>@s.whatsapp.net)
+- Full device session presence & business account tag detection
+- 99.9% Uptime with automatic multi-gateway failover redundancy
+- Webhook events and Telegram automated alerts
+
+--------------------------------------------------------------------------------
+2. BASE URL & AUTHENTICATION
+--------------------------------------------------------------------------------
+Base URLs:
+- Production Gateway: https://ais-dev-vkulebubzwd2ybb2kjedeu-484782538497.asia-southeast1.run.app
+- Local VPS / Node Engine: http://localhost:3000
+
+All HTTP requests must include your API authorization token in the header:
+Authorization: Bearer <YOUR_API_KEY>
+
+--------------------------------------------------------------------------------
+3. ENDPOINT 1: VERIFY SINGLE PHONE NUMBER
+--------------------------------------------------------------------------------
+Method: GET
+Path: /api/check-phone
+Query Parameters:
+- phone (string, required): Phone number formatted with country code (e.g. +8801700000000)
+
+Request Example:
+GET /api/check-phone?phone=+8801712345678 HTTP/1.1
+Host: api.yourdomain.com
+Authorization: Bearer YOUR_API_KEY
+
+Response Example (Status: 200 OK):
+{
+  "phone": "8801712345678",
+  "exists": true,
+  "whatsapp": {
+    "exists": true,
+    "jid": "8801712345678@s.whatsapp.net"
+  },
+  "checkedAt": "${new Date().toISOString()}"
+}
+
+--------------------------------------------------------------------------------
+4. ENDPOINT 2: BULK BATCH NUMBER CHECKER (HIGH SPEED)
+--------------------------------------------------------------------------------
+Method: POST
+Path: /api/check-batch
+Headers:
+  Content-Type: application/json
+  Authorization: Bearer YOUR_API_KEY
+
+Request Body:
+{
+  "numbers": [
+    "+8801712345678",
+    "+8801812345678",
+    "+919876543210",
+    "+12015550123"
+  ]
+}
+
+Response Example (Status: 200 OK):
+{
+  "total": 4,
+  "activeCount": 3,
+  "inactiveCount": 1,
+  "active": [
+    "8801712345678",
+    "+919876543210",
+    "+12015550123"
+  ],
+  "inactive": [
+    "+8801812345678"
+  ],
+  "timestamp": "${new Date().toISOString()}"
+}
+
+--------------------------------------------------------------------------------
+5. ENDPOINT 3: GATEWAY & BOT STATUS
+--------------------------------------------------------------------------------
+Method: GET
+Path: /api/status
+
+Response Example:
+{
+  "status": "connected",
+  "phone": "8801700000000",
+  "profile": {
+    "name": "Linkify Business Node"
+  },
+  "activeSessionsCount": 1
+}
+
+--------------------------------------------------------------------------------
+6. CODE EXAMPLES
+--------------------------------------------------------------------------------
+
+A. cURL (Command Line):
+--------------------------------------------------
+curl -X POST "https://your-api-domain.com/api/check-batch" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -d '{"numbers": ["+8801712345678", "+8801812345678"]}'
+
+B. Python (requests):
+--------------------------------------------------
+import requests
+
+url = "https://your-api-domain.com/api/check-batch"
+headers = {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer YOUR_API_KEY"
+}
+payload = {
+    "numbers": ["+8801712345678", "+8801812345678"]
+}
+
+response = requests.post(url, json=payload, headers=headers)
+data = response.json()
+print("Active Numbers:", data.get("active"))
+print("Inactive Numbers:", data.get("inactive"))
+
+C. Node.js (JavaScript / TypeScript):
+--------------------------------------------------
+const response = await fetch("https://your-api-domain.com/api/check-batch", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer YOUR_API_KEY"
+  },
+  body: JSON.stringify({
+    numbers: ["+8801712345678", "+8801812345678"]
+  })
+});
+const result = await response.json();
+console.log("Result:", result);
+
+D. PHP (cURL):
+--------------------------------------------------
+<?php
+$ch = curl_init('https://your-api-domain.com/api/check-batch');
+$payload = json_encode(['numbers' => ['+8801712345678', '+8801812345678']]);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'Authorization: Bearer YOUR_API_KEY'
+]);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$response = curl_exec($ch);
+curl_close($ch);
+$data = json_decode($response, true);
+print_r($data);
+?>
+
+--------------------------------------------------------------------------------
+7. HTTP STATUS & ERROR CODES
+--------------------------------------------------------------------------------
+200 OK           : Request completed successfully.
+400 Bad Request  : Invalid phone number format or missing required payload.
+401 Unauthorized : Invalid or expired API Key.
+429 Too Many Req : Rate limit exceeded for current package tier.
+503 Unavailable  : WhatsApp gateway node reconnecting. Retry in 2-3 seconds.
+
+--------------------------------------------------------------------------------
+8. SUPPORT & LICENSE UPGRADE
+--------------------------------------------------------------------------------
+To purchase enterprise access tokens, increase concurrency, or integrate custom 
+webhooks, contact the official system administrator in Telegram:
+Admin ID: 8343010638
+Telegram Bot: @WhatsappCheckerApi_Bot
+
+
+================================================================================
+             PART 2: সম্পূর্ণ বাংলা ডকুমেন্টেশন ও ব্যবহারের নির্দেশিকা
+================================================================================
+
+--------------------------------------------------------------------------------
+১. পরিচিতি ও সিস্টেমের ক্ষমতাসমূহ (Overview & Capabilities)
+--------------------------------------------------------------------------------
+এই এন্টারপ্রাইজ REST API এর মাধ্যমে আপনি যেকোনো সফটওয়্যার, সিআরএম, ই-কমার্স বা
+ওয়েবসাইট থেকে সরাসরি রিয়েল-টাইমে হোয়াটসঅ্যাপ ও টেলিগ্রাম নম্বর যাচাই করতে পারবেন।
+নম্বরটিতে হোয়াটসঅ্যাপ সক্রিয় আছে কিনা এবং বিজনেস প্রোফাইল কিনা তা মিলি-সেকেন্ডে নির্ণয় করা যায়।
+
+মূল সুবিধাসমূহ:
+- একক এবং হাজার হাজার নম্বর একসাথে বাল্ক চেকিং
+- অতি দ্রুত রেসপন্স টাইম (০.১ - ০.৩ সেকেন্ড প্রতি নম্বর)
+- একাধিক গেটওয়ের মাধ্যমে ৯৯.৯% আপটাইম ব্যাকআপ
+- স্বয়ংক্রিয় ওয়েবহুক ও টেলিগ্রাম নোটিফিকেশন সুবিধা
+
+--------------------------------------------------------------------------------
+২. বেস ইউআরএল ও এপিআই অথেনটিকেশন (Base URL & Authentication)
+--------------------------------------------------------------------------------
+সার্ভার লিংকসমূহ:
+- প্রোডাকশন গেটওয়ে: https://ais-dev-vkulebubzwd2ybb2kjedeu-484782538497.asia-southeast1.run.app
+- লোকাল সার্ভার: http://localhost:3000
+
+প্রতিটি HTTP রিকোয়েস্টে হেডার (Header)-এ আপনার সিক্রেট API Key প্রদান করতে হবে:
+Authorization: Bearer <আপনার_এপিআই_কি>
+
+--------------------------------------------------------------------------------
+৩. এন্ডপয়েন্ট ১: একটি মাত্র নম্বর যাচাই (Verify Single Phone Number)
+--------------------------------------------------------------------------------
+মেথড: GET
+পাথ: /api/check-phone
+প্রয়োজনীয় প্যারামিটার:
+- phone (string): কান্ট্রি কোড সহ ফোন নম্বর (যেমন: +8801700000000)
+
+রিকোয়েস্ট উদাহরণ:
+GET /api/check-phone?phone=+8801712345678 HTTP/1.1
+Host: api.yourdomain.com
+Authorization: Bearer YOUR_API_KEY
+
+রেসপন্স উদাহরণ (200 OK):
+{
+  "phone": "8801712345678",
+  "exists": true,
+  "whatsapp": {
+    "exists": true,
+    "jid": "8801712345678@s.whatsapp.net"
+  },
+  "checkedAt": "${new Date().toISOString()}"
+}
+ব্যাখ্যা: যদি নম্বরটিতে হোয়াটসঅ্যাপ সক্রিয় থাকে তবে "exists": true আসবে, অন্যথায় false আসবে।
+
+--------------------------------------------------------------------------------
+৪. এন্ডপয়েন্ট ২: বাল্ক ব্যাচ চেকার (Bulk Batch Number Checker - High Speed)
+--------------------------------------------------------------------------------
+মেথড: POST
+পাথ: /api/check-batch
+হেডার:
+  Content-Type: application/json
+  Authorization: Bearer YOUR_API_KEY
+
+রিকোয়েস্ট বডি (JSON Body):
+{
+  "numbers": [
+    "+8801712345678",
+    "+8801812345678",
+    "+919876543210",
+    "+12015550123"
+  ]
+}
+
+রেসপন্স উদাহরণ (200 OK):
+{
+  "total": 4,
+  "activeCount": 3,
+  "inactiveCount": 1,
+  "active": [
+    "8801712345678",
+    "+919876543210",
+    "+12015550123"
+  ],
+  "inactive": [
+    "+8801812345678"
+  ],
+  "timestamp": "${new Date().toISOString()}"
+}
+ব্যাখ্যা: একসাথে হাজার হাজার নম্বর পাঠালে সার্ভার স্বয়ংক্রিয়ভাবে সক্রিয় (active)
+এবং নিষ্ক্রিয় (inactive) তালিকা আলাদা করে রিটার্ন করে।
+
+--------------------------------------------------------------------------------
+৫. এন্ডপয়েন্ট ৩: গেটওয়ে ও বটের বর্তমান অবস্থা (Gateway Status)
+--------------------------------------------------------------------------------
+মেথড: GET
+পাথ: /api/status
+
+রেসপন্স উদাহরণ:
+{
+  "status": "connected",
+  "phone": "8801700000000",
+  "profile": {
+    "name": "Linkify Business Node"
+  },
+  "activeSessionsCount": 1
+}
+ব্যাখ্যা: স্ট্যাটাস "connected" থাকলে বুঝতে হবে গেটওয়ে সম্পূর্ণ প্রস্তুত ও লাইভ রয়েছে।
+
+--------------------------------------------------------------------------------
+৬. প্রোগ্রামিং কোড উদাহরণ (Code Examples)
+--------------------------------------------------------------------------------
+
+ক. cURL (কমান্ড লাইন দিয়ে পরীক্ষা):
+--------------------------------------------------
+curl -X POST "https://your-api-domain.com/api/check-batch" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -d '{"numbers": ["+8801712345678", "+8801812345678"]}'
+
+খ. Python (পাইথন স্ক্রিপ্ট):
+--------------------------------------------------
+import requests
+
+url = "https://your-api-domain.com/api/check-batch"
+headers = {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer YOUR_API_KEY"
+}
+payload = {
+    "numbers": ["+8801712345678", "+8801812345678"]
+}
+
+response = requests.post(url, json=payload, headers=headers)
+data = response.json()
+print("সক্রিয় নম্বরসমূহ:", data.get("active"))
+print("নিষ্ক্রিয় নম্বরসমূহ:", data.get("inactive"))
+
+গ. Node.js (জাভাস্ক্রিপ্ট / টাইপস্ক্রিপ্ট):
+--------------------------------------------------
+const response = await fetch("https://your-api-domain.com/api/check-batch", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer YOUR_API_KEY"
+  },
+  body: JSON.stringify({
+    numbers: ["+8801712345678", "+8801812345678"]
+  })
+});
+const result = await response.json();
+console.log("চেকিং ফলাফল:", result);
+
+ঘ. PHP (পিএইচপি ওয়েবসাইট):
+--------------------------------------------------
+<?php
+$ch = curl_init('https://your-api-domain.com/api/check-batch');
+$payload = json_encode(['numbers' => ['+8801712345678', '+8801812345678']]);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'Authorization: Bearer YOUR_API_KEY'
+]);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$response = curl_exec($ch);
+curl_close($ch);
+$data = json_decode($response, true);
+print_r($data);
+?>
+
+--------------------------------------------------------------------------------
+৭. এইচটিটিপি স্ট্যাটাস ও এরর কোড (HTTP Status & Error Codes)
+--------------------------------------------------------------------------------
+২০০ OK           : রিকোয়েস্ট সফলভাবে সম্পন্ন হয়েছে।
+৪০০ Bad Request  : ভুল ফোন নম্বর ফরম্যাট বা পে-লোড মিসিং।
+৪০১ Unauthorized : এপিআই কি সঠিক নয় বা মেয়াদ শেষ।
+৪২৯ Too Many Req : আপনার প্যাকেজের নির্ধারিত রিকোয়েস্ট সীমা পার হয়েছে।
+৫০৩ Unavailable  : গেটওয়ে নোড পুনরায় কানেক্ট হচ্ছে, কয়েক সেকেন্ড পর আবার চেষ্টা করুন।
+
+--------------------------------------------------------------------------------
+৮. সহায়তা ও এন্টারপ্রাইজ লাইসেন্স ক্রয় (Support & License Upgrade)
+--------------------------------------------------------------------------------
+আনলিমিটেড স্পিড প্যাকেজ, এপিআই কি ক্রয়, কনকারেন্সি বৃদ্ধি বা কাস্টম গেটওয়ে 
+সেটআপ করতে সরাসরি সিস্টেম অ্যাডমিনের টেলিগ্রামে যোগাযোগ করুন:
+অ্যাডমিন আইডি: 8343010638
+টেলিগ্রাম বট: @WhatsappCheckerApi_Bot
+================================================================================
+`;
+}
+
+export function getManagePackageDashboardText() {
+  const { totalUsers, premiumUsers, freeUsers } = getUserStats();
+  const users = getBotUsersList();
+  const premiumUsersList = users.filter(u => u.isPremium);
+
+  let text = 
+    `💎 <b>PREMIUM & API PACKAGE MANAGEMENT</b>\n\n` +
+    `📊 <b>User & License Overview:</b>\n` +
+    `▫️ <b>Total Users:</b> <code>${totalUsers}</code> registered\n` +
+    `▫️ <b>Premium Users:</b> <code>${premiumUsers}</code> with API package 💎\n` +
+    `▫️ <b>Free Tier Users:</b> <code>${freeUsers}</code> standard\n\n` +
+    `👑 <b>Active Premium API Users (${premiumUsersList.length}):</b>\n`;
+
+  if (premiumUsersList.length === 0) {
+    text += `▫️ <i>No external premium users granted yet.</i>\n\n`;
+  } else {
+    premiumUsersList.slice(0, 10).forEach((u, i) => {
+      text += `${i + 1}. <b>${u.name}</b> (${u.username})\n   ▫️ Chat ID: <code>${u.chatId}</code>\n   ▫️ Tier: <b>${u.package}</b> | Granted: ${u.grantedAt ? new Date(u.grantedAt).toLocaleDateString() : "Active"}\n`;
+    });
+    if (premiumUsersList.length > 10) {
+      text += `   <i>...and ${premiumUsersList.length - 10} more.</i>\n`;
+    }
+    text += `\n`;
+  }
+
+  text += 
+    `🛠 <b>Admin Commands to Manage:</b>\n` +
+    `▫️ <code>/setpremium &lt;chat_id&gt;</code> - Upgrade user to Premium API Package\n` +
+    `▫️ <code>/removepremium &lt;chat_id&gt;</code> - Revoke Premium & revert to Free\n` +
+    `▫️ <code>/users</code> - View full detailed list of all registered users\n\n` +
+    `<i>Tap Refresh below to update live counts.</i>`;
+
+  return text;
+}
+
 export function getAdminPanelDashboardText() {
   const accounts = getSavedAccountsList();
+  const { totalUsers, premiumUsers, freeUsers } = getUserStats();
   return (
-    `⚙️ <b>ADMIN PANEL (অ্যাডমিন কন্ট্রোল সেন্টার)</b>\n\n` +
-    `👑 <b>অ্যাডমিন আইডি:</b> <code>${ADMIN_CHAT_ID}</code> (অথরাইজড)\n\n` +
-    `📊 <b>বর্তমান সিস্টেম অবস্থা:</b>\n` +
-    `▫️ একটিভ গেটওয়ে: ${currentActivePhone ? `🟢 +${currentActivePhone}` : "🔴 কোনো সক্রিয় অ্যাকাউন্ট নেই"}\n` +
-    `▫️ মোট সংরক্ষিত অ্যাকাউন্ট: ${accounts.length} টি\n` +
-    `▫️ মেমরি সেশন: ${activeSessions.size} টি\n` +
-    `▫️ টেলিগ্রাম বট: 🟢 অনলাইন (@WhatsappCheckerApi_Bot)\n\n` +
-    `🛠 <b>অ্যাডমিন কমান্ডসমূহ:</b>\n` +
-    `▫️ <code>/status</code> - সকল ইউজারের লিঙ্ককৃত অ্যাকাউন্টের লাইভ স্ট্যাটাস দেখুন\n` +
-    `▫️ <code>/login &lt;ফোন নম্বর&gt;</code> - নতুন হোয়াটসঅ্যাপ গেটওয়ে পেয়ারিং কোড নিন\n` +
-    `▫️ <code>/logout &lt;ফোন নম্বর&gt;</code> - যেকোনো অ্যাকাউন্ট বা সেশন ডিলিট করুন\n` +
-    `▫️ <code>/check &lt;ফোন নম্বর&gt;</code> - সরাসরি নম্বর ভ্যালিডেশন করুন\n` +
-    `▫️ বাল্ক ফাইল আপলোড - আনলিমিটেড নম্বর প্রসেসিং\n\n` +
-    `👇 সিস্টেম সেটিংস ম্যানেজ করতে নিচের <b>SETTINGS</b> বাটনে ক্লিক করুন:`
+    `⚙️ <b>ADMIN CONTROL PANEL</b>\n\n` +
+    `👑 <b>Admin ID:</b> <code>${ADMIN_CHAT_ID}</code> (Authorized)\n\n` +
+    `👥 <b>USER & PACKAGE ANALYTICS:</b>\n` +
+    `▫️ <b>Total Users:</b> <code>${totalUsers}</code> registered\n` +
+    `▫️ <b>Premium Users:</b> <code>${premiumUsers}</code> with API package 💎\n` +
+    `▫️ <b>Free Tier Users:</b> <code>${freeUsers}</code> standard\n\n` +
+    `📊 <b>System Status:</b>\n` +
+    `▫️ Active Gateway: ${currentActivePhone ? `🟢 +${currentActivePhone}` : "🔴 No active account"}\n` +
+    `▫️ Stored Accounts: ${accounts.length}\n` +
+    `▫️ Memory Sessions: ${activeSessions.size}\n` +
+    `▫️ Telegram Bot: 🟢 Online (@WhatsappCheckerApi_Bot)\n\n` +
+    `🛠 <b>Admin Commands:</b>\n` +
+    `▫️ <code>/users</code> - View full list of users and active packages\n` +
+    `▫️ <code>/setpremium &lt;chat_id&gt;</code> - Upgrade user to Premium API Package\n` +
+    `▫️ <code>/removepremium &lt;chat_id&gt;</code> - Revert user to Free tier\n` +
+    `▫️ <code>/status</code> - View live status of all linked accounts\n` +
+    `▫️ <code>/login &lt;phone&gt;</code> - Generate pairing code for new WhatsApp gateway\n` +
+    `▫️ <code>/logout &lt;phone&gt;</code> - Disconnect and remove account\n` +
+    `▫️ <code>/check &lt;phone&gt;</code> - Validate single phone number\n` +
+    `▫️ Bulk File Upload - Process unlimited numbers via .txt/.csv\n\n` +
+    `👇 Click <b>SETTINGS</b> or <b>USER & PACKAGE ANALYTICS</b> below:`
   );
 }
 
@@ -548,13 +1184,42 @@ export async function handleTelegramCallbackQuery(call) {
   const chatId = call.message?.chat?.id || fromId;
   const msgId = call.message?.message_id;
 
-  if (String(fromId) !== ADMIN_CHAT_ID && String(chatId) !== ADMIN_CHAT_ID) {
-    await answerTelegramCallbackQuery(callId, "⛔ অ্যাক্সেস ডিনাইড: আপনি এই সিস্টেমের অ্যাডমিন নন!", true);
+  if (chatId) {
+    trackBotUser(chatId, call.from);
+  }
+
+  // Public callback: Download API Documentation
+  if (data === "download_api_docs") {
+    await answerTelegramCallbackQuery(callId, "📥 Preparing API documentation file...");
+    const docContent = generateApiDocumentationContent();
+    await sendTelegramDocument(
+      chatId,
+      docContent,
+      "API_DOCUMENTATION_GUIDE.txt",
+      "📄 <b>API Documentation & Integration Guide</b>\n\nOfficial WhatsApp & Telegram Checker API documentation (Bilingual: English & Bengali)."
+    );
     return;
   }
 
+  // Security check: Only target admin ID 8343010638 can use admin callbacks
+  const adminCallbacks = [
+    "system_settings",
+    "premium_management_menu",
+    "admin_panel_home",
+    "manage_package_menu",
+    "payment_management_menu",
+    "deposit_method_menu",
+    "dollar_rate_menu"
+  ];
+  if (adminCallbacks.includes(data)) {
+    if (String(fromId) !== ADMIN_CHAT_ID && String(chatId) !== ADMIN_CHAT_ID) {
+      await answerTelegramCallbackQuery(callId, "⛔ Access Denied: You are not an administrator of this system!", true);
+      return;
+    }
+  }
+
   if (data === "system_settings") {
-    const text = `⚙️ <b>SYSTEM SETTINGS</b>\n\nএডমিন সিস্টেমের সকল সেটিংস কনফিগার করতে নিচের মেনু সিলেক্ট করুন:`;
+    const text = `⚙️ <b>SYSTEM SETTINGS</b>\n\nSelect a configuration menu below:`;
     if (msgId) {
       await editTelegramMessage(chatId, msgId, text, "HTML", SETTINGS_MENU_KEYBOARD);
     } else {
@@ -575,6 +1240,38 @@ export async function handleTelegramCallbackQuery(call) {
     return;
   }
 
+  if (data === "payment_management_menu") {
+    const text = `💳 <b>PAYMENT MANAGEMENT</b>\n\nConfigure deposit gateways, payment methods, and dollar exchange rates below:`;
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", PAYMENT_MANAGEMENT_KEYBOARD);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", PAYMENT_MANAGEMENT_KEYBOARD);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
+  if (data === "deposit_method_menu") {
+    await answerTelegramCallbackQuery(callId, "💳 Deposit Method configuration will be available soon.", true);
+    return;
+  }
+
+  if (data === "dollar_rate_menu") {
+    await answerTelegramCallbackQuery(callId, "💵 Dollar Rate configuration will be available soon.", true);
+    return;
+  }
+
+  if (data === "manage_package_menu") {
+    const text = getManagePackageDashboardText();
+    if (msgId) {
+      await editTelegramMessage(chatId, msgId, text, "HTML", MANAGE_PACKAGE_KEYBOARD);
+    } else {
+      await sendTelegramMessage(chatId, text, "HTML", MANAGE_PACKAGE_KEYBOARD);
+    }
+    await answerTelegramCallbackQuery(callId);
+    return;
+  }
+
   if (data === "admin_panel_home") {
     const text = getAdminPanelDashboardText();
     if (msgId) {
@@ -587,7 +1284,7 @@ export async function handleTelegramCallbackQuery(call) {
   }
 
   if (data === "dummy_alert") {
-    await answerTelegramCallbackQuery(callId, "⚠️ এই ফিচারটির কনফিগারেশন শীঘ্রই যোগ করা হচ্ছে (Dummy Alert)।", true);
+    await answerTelegramCallbackQuery(callId, "⚠️ This feature configuration will be available soon (Dummy Alert).", true);
     return;
   }
 
@@ -793,7 +1490,7 @@ export async function initWhatsApp(phoneNumber, isReconnect = false) {
         if (owner?.chatId) {
           sendTelegramMessage(
             owner.chatId,
-            `🎉 *হোয়াটসঅ্যাপ লিঙ্ক সম্পন্ন!* \n\nআপনার হোয়াটসঅ্যাপ অ্যাকাউন্ট (+${phoneNumber}) সফলভাবে যুক্ত হয়েছে এবং আপনার টেলিগ্রাম অ্যাকাউন্টের সাথে লিঙ্ক করা হয়েছে।`
+            `🎉 *WhatsApp Linked Successfully!* \n\nYour WhatsApp account (+${phoneNumber}) has been connected and linked to your Telegram account.`
           );
         }
       } else if (connection === "close") {
@@ -921,9 +1618,9 @@ export async function checkAndRespondBatch(chatId, rawNumbers) {
   if (!gatewayPhone) {
     await sendTelegramMessage(
       chatId,
-      "⚠️ *দুঃখিত, কোনো সক্রিয় হোয়াটসঅ্যাপ অ্যাকাউন্ট সংযুক্ত নেই!* \n\n" +
-        "অনুগ্রহ করে প্রথমে বটের সাথে আপনার হোয়াটসঅ্যাপ লিঙ্ক করতে লিখুন: `/login <ফোন নম্বর>`\n" +
-        "যেমন: `/login 8801700000000`"
+      "⚠️ *No active WhatsApp gateway connected!* \n\n" +
+        "Please connect your WhatsApp to the bot first using: `/login <phone_number>`\n" +
+        "Example: `/login 8801700000000`"
     );
     return;
   }
@@ -939,15 +1636,15 @@ export async function checkAndRespondBatch(chatId, rawNumbers) {
   }
 
   if (normalizedList.length === 0) {
-    await sendTelegramMessage(chatId, "⚠️ কোনো সঠিক মোবাইল নম্বর পাওয়া যায়নি। অনুগ্রহ করে সঠিক নম্বর ইনপুট দিন।");
+    await sendTelegramMessage(chatId, "⚠️ No valid phone numbers found. Please provide valid numbers with country codes.");
     return;
   }
 
   const progressMsgId = await sendTelegramMessage(
     chatId,
-    `🔍 *হোয়াটসঅ্যাপ ডেটাবেজ চেক করা হচ্ছে...*\n\n` +
-      `মোট ইউনিক নম্বর: *${normalizedList.length}* টি\n` +
-      `সক্রিয় গেটওয়ে: *+${gatewayPhone}*`
+    `🔍 *Checking WhatsApp Database...*\n\n` +
+      `Total Unique Numbers: *${normalizedList.length}*\n` +
+      `Active Gateway: *+${gatewayPhone}*`
   );
 
   const activeWa = [];
@@ -973,9 +1670,9 @@ export async function checkAndRespondBatch(chatId, rawNumbers) {
         await editTelegramMessage(
           chatId,
           progressMsgId,
-          `🔍 *হোয়াটসঅ্যাপ ডেটাবেজ চেক করা হচ্ছে...*\n\n` +
-            `⏳ অগ্রগতি: *${i + 1}/${normalizedList.length}* (${pct}%)\n` +
-            `🟢 সক্রিয়: *${activeWa.length}* | 🔴 নিষ্ক্রিয়: *${inactiveWa.length}*`
+          `🔍 *Checking WhatsApp Database...*\n\n` +
+            `⏳ Progress: *${i + 1}/${normalizedList.length}* (${pct}%)\n` +
+            `🟢 Active: *${activeWa.length}* | 🔴 Inactive: *${inactiveWa.length}*`
         );
       }
     }
@@ -983,14 +1680,14 @@ export async function checkAndRespondBatch(chatId, rawNumbers) {
 
   // Small batch: send full list in message
   if (normalizedList.length <= 30) {
-    const activeText = activeWa.length > 0 ? activeWa.map((x) => `+${x}`).join("\n") : "_কোনোটিই নয়_";
-    const inactiveText = inactiveWa.length > 0 ? inactiveWa.map((x) => `+${x}`).join("\n") : "_কোনোটিই নয়_";
+    const activeText = activeWa.length > 0 ? activeWa.map((x) => `+${x}`).join("\n") : "_None_";
+    const inactiveText = inactiveWa.length > 0 ? inactiveWa.map((x) => `+${x}`).join("\n") : "_None_";
 
     const report =
-      `🤖 *হোয়াটসঅ্যাপ নম্বর চেকার রিপোর্ট*\n\n` +
-      `📊 *মোট নম্বর:* ${normalizedList.length} টি\n` +
-      `✅ *হোয়াটসঅ্যাপ সক্রিয় (${activeWa.length} টি):*\n${activeText}\n\n` +
-      `❌ *হোয়াটসঅ্যাপ খোলা নেই (${inactiveWa.length} টি):*\n${inactiveText}`;
+      `🤖 *WhatsApp Checker Report*\n\n` +
+      `📊 *Total Checked:* ${normalizedList.length}\n` +
+      `✅ *Active WhatsApp Accounts (${activeWa.length}):*\n${activeText}\n\n` +
+      `❌ *Not on WhatsApp (${inactiveWa.length}):*\n${inactiveText}`;
 
     if (progressMsgId) {
       await editTelegramMessage(chatId, progressMsgId, report);
@@ -1000,11 +1697,11 @@ export async function checkAndRespondBatch(chatId, rawNumbers) {
   } else {
     // Large batch: send summary message + downloadable txt document
     const summary =
-      `🤖 *বাল্ক নম্বর চেকার রিপোর্ট (Bulk Summary)*\n\n` +
-      `📊 *মোট ইউনিক নম্বর:* ${normalizedList.length} টি\n` +
-      `🟢 হোয়াটসঅ্যাপ সক্রিয়: *${activeWa.length}* টি\n` +
-      `🔴 হোয়াটসঅ্যাপ নেই: *${inactiveWa.length}* টি\n\n` +
-      `📁 নিচে সম্পূর্ণ রেজাল্ট ফাইল আকারে পাঠানো হলো:`;
+      `🤖 *Bulk WhatsApp Checker Report*\n\n` +
+      `📊 *Total Checked:* ${normalizedList.length}\n` +
+      `🟢 *Active WhatsApp Accounts:* *${activeWa.length}*\n` +
+      `🔴 *Not on WhatsApp:* *${inactiveWa.length}*\n\n` +
+      `📁 Detailed results are attached in the file below:`;
 
     if (progressMsgId) {
       await editTelegramMessage(chatId, progressMsgId, summary);
@@ -1033,7 +1730,7 @@ export async function handleTelegramDocument(chatId, doc) {
   const fileId = doc.file_id;
   const fileName = doc.file_name || "numbers.txt";
 
-  await sendTelegramMessage(chatId, `⏳ *${fileName}* ফাইলটি প্রসেস করা হচ্ছে... নম্বরগুলো বের করা হচ্ছে।`);
+  await sendTelegramMessage(chatId, `⏳ Processing *${fileName}*... Extracting phone numbers.`);
 
   try {
     const fileInfoRes = await fetch(`${TG_API_URL}/getFile?file_id=${fileId}`);
@@ -1052,11 +1749,11 @@ export async function handleTelegramDocument(chatId, doc) {
     if (matches && matches.length > 0) {
       await checkAndRespondBatch(chatId, matches);
     } else {
-      await sendTelegramMessage(chatId, "⚠️ ফাইলটিতে কোনো সঠিক ৮ থেকে ১৫ ডিজিটের মোবাইল নম্বর পাওয়া যায়নি।");
+      await sendTelegramMessage(chatId, "⚠️ No valid 8 to 15-digit mobile numbers found in this file. Please upload a valid .txt or .csv file.");
     }
   } catch (err) {
     console.error("[Telegram Doc Error]:", err);
-    await sendTelegramMessage(chatId, `❌ ফাইল প্রসেস করতে ব্যর্থ হয়েছে: ${err.message || err}`);
+    await sendTelegramMessage(chatId, `❌ An error occurred while processing the file: ${err.message || err}`);
   }
 }
 
@@ -1064,6 +1761,8 @@ export async function handleTelegramDocument(chatId, doc) {
 export async function handleTelegramMessage(message) {
   const chatId = message.chat?.id;
   if (!chatId) return;
+
+  const currentUser = trackBotUser(chatId, message.from || message.chat);
 
   if (message.document) {
     await handleTelegramDocument(chatId, message.document);
@@ -1076,23 +1775,23 @@ export async function handleTelegramMessage(message) {
   // /start
   if (text.startsWith("/start")) {
     const isAdmin = String(chatId) === ADMIN_CHAT_ID;
-    const adminLine = isAdmin ? `🔘 *ADMIN PANEL* - সিস্টেম অ্যাডমিন কন্ট্রোল প্যানেল\n\n` : `\n`;
+    const adminLine = isAdmin ? `🔘 *ADMIN PANEL* - System Administrator Control Panel\n\n` : `\n`;
     const startMsg =
-      `👋 *স্বাগতম! আমি আপনার লিঙ্কফাই হোয়াটসঅ্যাপ চেকার বট।*\n\n` +
-      `আপনার টেলিগ্রাম বট থেকে সরাসরি হোয়াটসঅ্যাপ লগইন এবং নম্বর চেক করতে পারবেন। নিচের মেনু বাটনগুলো ব্যবহার করুন:\n\n` +
-      `🔘 *CONNECT WS CHECKER* - হোয়াটসঅ্যাপ লিঙ্ক করার পেয়ারিং কোড নিন\n` +
-      `🔘 *CHECK WS NUMBER* - হোয়াটসঅ্যাপ নম্বর চেক নির্দেশিকা\n` +
-      `🔘 *BUY WS AND TG API* - হোয়াটসঅ্যাপ ও টেলিগ্রাম এপিআই প্যাকেজ ও কি\n` +
-      `🔘 *HELP* - সহায়তা এবং সকল কমান্ড\n` +
-      `🔘 *MY PROFILE* - আপনার প্রোফাইল ও সংরক্ষিত অ্যাকাউন্টের বিবরণ\n` +
-      `🔘 *MY PACKAGE* - বর্তমান প্যাকেজ ও লিমিট স্ট্যাটাস\n` +
+      `👋 *Welcome to Linkify WhatsApp & Telegram Checker Engine!*\n\n` +
+      `Directly connect your WhatsApp gateway and check numbers at lightning speed. Use the buttons below:\n\n` +
+      `🔘 *CONNECT WS CHECKER* - Get pairing code to link WhatsApp\n` +
+      `🔘 *CHECK WS NUMBER* - Guidelines for checking numbers\n` +
+      `🔘 *BUY WS AND TG API* - Purchase API license keys & access\n` +
+      `🔘 *HELP* - User guide and all commands\n` +
+      `🔘 *MY PROFILE* - Profile details and linked accounts\n` +
+      `🔘 *MY PACKAGE* - Current package limits and active tier\n` +
       adminLine +
-      `📌 *সরাসরি কমান্ডসমূহ:*\n` +
-      `▫️ \`/login <ফোন নম্বর>\` - হোয়াটসঅ্যাপ লিঙ্ক করার জন্য ৮ সংখ্যার পেয়ারিং কোড পান। (যেমন: \`/login 8801700000000\`)\n` +
-      `▫️ \`/check <ফোন নম্বর>\` - নম্বরটিতে হোয়াটসঅ্যাপ আছে কিনা ইনস্ট্যান্ট চেক করুন। (যেমন: \`/check 8801712345678\`)\n` +
-      `▫️ \`/status\` - লিঙ্ককৃত অ্যাকাউন্ট ও কানেকশন অবস্থা দেখুন।\n` +
-      `▫️ \`/logout <ফোন নম্বর>\` - অ্যাকাউন্ট মুছে ফেলুন বা ডিসকানেক্ট করুন।\n\n` +
-      `💡 *বাল্ক চেক:* মেসেজে একসাথে একাধিক নম্বর লিখুন অথবা কোনো \`.txt\` বা \`.csv\` ফাইল সেন্ড করুন, বট অটোমেটিক চেক করে রিপোর্ট পাঠাবে! 🚀`;
+      `📌 *Direct Commands:*\n` +
+      `▫️ \`/login <phone_number>\` - Receive 8-digit pairing code to link WhatsApp (e.g. \`/login 8801700000000\`)\n` +
+      `▫️ \`/check <phone_number>\` - Fast verification for a single number (e.g. \`/check 8801712345678\`)\n` +
+      `▫️ \`/status\` - View live status of connected accounts\n` +
+      `▫️ \`/logout <phone_number>\` - Disconnect and remove an account\n\n` +
+      `💡 *Bulk Checking:* Send multiple numbers in a message or upload a \`.txt\` / \`.csv\` file for instant processing! 🚀`;
     await sendTelegramMessage(chatId, startMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
@@ -1101,11 +1800,11 @@ export async function handleTelegramMessage(message) {
   if (text === "CONNECT WS CHECKER" || text.includes("CONNECT WS CHECKER")) {
     const connectMsg = 
       `🔗 *CONNECT WS CHECKER*\n\n` +
-      `আপনার হোয়াটসঅ্যাপ অ্যাকাউন্ট বটের সাথে কানেক্ট করতে নিচের নিয়মে কমান্ড দিন:\n` +
-      `👉 \`/login <ফোন নম্বর>\`\n\n` +
-      `*উদাহরণ:*\n` +
+      `To link your WhatsApp account to the bot, run the following command:\n` +
+      `👉 \`/login <phone_number>\`\n\n` +
+      `*Example:*\n` +
       `\`/login 8801700000000\`\n\n` +
-      `ℹ️ কমান্ড পাঠালে আপনি একটি ৮-ডিজিটের পেয়ারিং কোড পাবেন যা দিয়ে মোবাইলের WhatsApp অ্যাপ থেকে *Linked Devices* এ গিয়ে লিঙ্ক করতে পারবেন।`;
+      `ℹ️ You will receive an 8-digit pairing code. Open WhatsApp on your phone > *Linked Devices* > *Link with phone number instead* and enter the code.`;
     await sendTelegramMessage(chatId, connectMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
@@ -1113,11 +1812,11 @@ export async function handleTelegramMessage(message) {
   if (text === "CHECK WS NUMBER" || text.includes("CHECK WS NUMBER")) {
     const checkGuideMsg = 
       `🔍 *CHECK WS NUMBER*\n\n` +
-      `হোয়াটসঅ্যাপ নম্বর চেক করার বিভিন্ন সহজ উপায়:\n\n` +
-      `১️⃣ *সিঙ্গেল নম্বর:* কমান্ড দিন \`/check <ফোন নম্বর>\` (যেমন: \`/check 8801712345678\`)\n` +
-      `২️⃣ *দ্রুত চেক:* এক বা একাধিক নম্বর সরাসরি মেসেজে লিখে পাঠিয়ে দিন\n` +
-      `৩️⃣ *বাল্ক ফাইল চেক:* নম্বরগুলোর একটি \`.txt\` বা \`.csv\` ফাইল এখানে আপলোড দিন\n\n` +
-      `বট সাথে সাথে ফিল্টার করে সক্রিয় ও নিষ্ক্রিয় তালিকা জানিয়ে দেবে! ⚡`;
+      `Quick ways to check phone numbers:\n\n` +
+      `১️⃣ *Single Number:* Send \`/check <phone_number>\` (e.g. \`/check 8801712345678\`)\n` +
+      `২️⃣ *Quick Check:* Paste one or more numbers directly into the chat\n` +
+      `৩️⃣ *Bulk File Check:* Upload a \`.txt\` or \`.csv\` file with numbers\n\n` +
+      `The bot will filter active and inactive WhatsApp accounts instantly! ⚡`;
     await sendTelegramMessage(chatId, checkGuideMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
@@ -1125,35 +1824,35 @@ export async function handleTelegramMessage(message) {
   if (text === "BUY WS AND TG API" || text.includes("BUY WS AND TG API") || text === "BUY WS API" || text.includes("BUY WS API") || text === "BUY PACKAGE" || text.includes("BUY PACKAGE")) {
     const buyApiMsg = 
       `⚡ *BUY WS AND TG API (WhatsApp & Telegram Checker API)*\n\n` +
-      `আপনার ওয়েবসাইট, সিআরএম বা সফটওয়্যারে হাই-স্পিড হোয়াটসঅ্যাপ ও টেলিগ্রাম চেকার ইন্টিগ্রেশনের জন্য অফিশিয়াল API অ্যাক্সেস নিন:\n\n` +
+      `Integrate high-speed WhatsApp and Telegram checking into your website, CRM, or software:\n\n` +
       `🔹 *REST API Endpoints:*\n` +
-      `▫️ \`GET /api/check-phone?phone=+88017...\` - একক নম্বর ভ্যালিডেশন\n` +
-      `▫️ \`POST /api/check-batch\` - রিয়েল-টাইম বাল্ক মাল্টি-থ্রেড চেকার\n` +
-      `▫️ \`POST /api/send-message\` - স্বয়ংক্রিয় মেসেজিং সুবিধা\n\n` +
-      `💎 *API ফিচারসমূহ:*\n` +
-      `▫️ হোয়াটসঅ্যাপ ও টেলিগ্রাম উভয় প্ল্যাটফর্ম সাপোর্ট\n` +
-      `▫️ আনলিমিটেড হাই-স্পিড রিকোয়েস্ট\n` +
-      `▫️ 99.9% আপটাইম মাল্টি-গেটওয়ে রিডানড্যান্সি\n` +
-      `▫️ ফুল টেলিগ্রাম ও ওয়েবহুক নোটিফিকেশন\n\n` +
-      `📞 *API কী এবং লাইসেন্স ক্রয়ের জন্য:* অ্যাডমিনের সাথে সরাসরি যোগাযোগ করুন।`;
-    await sendTelegramMessage(chatId, buyApiMsg, "Markdown", getMainMenuKeyboard(chatId));
+      `▫️ \`GET /api/check-phone?phone=+88017...\` - Single number validation\n` +
+      `▫️ \`POST /api/check-batch\` - Multi-threaded bulk batch checker\n` +
+      `▫️ \`POST /api/send-message\` - Automated messaging gateway\n\n` +
+      `💎 *API Highlights:*\n` +
+      `▫️ Full WhatsApp & Telegram support\n` +
+      `▫️ High concurrency & multi-threaded throughput\n` +
+      `▫️ 99.9% uptime with multi-gateway failover\n` +
+      `▫️ Complete webhook event notifications\n\n` +
+      `📞 *To purchase API license keys:* Click the button below to download the documentation guide or contact Admin directly.`;
+    await sendTelegramMessage(chatId, buyApiMsg, "Markdown", BUY_API_INLINE_KEYBOARD);
     return;
   }
 
   if (text === "HELP" || text.includes("HELP")) {
     const helpMsg = 
       `📖 *HELP & GUIDELINES*\n\n` +
-      `*কিভাবে ব্যবহার করবেন:*\n` +
-      `▫️ \`CONNECT WS CHECKER\` - হোয়াটসঅ্যাপ অ্যাকাউন্ট যুক্ত করার নিয়মাবলী\n` +
-      `▫️ \`CHECK WS NUMBER\` - নম্বর ফিল্টার ও ভেরিফিকেশন করার গাইড\n` +
-      `▫️ \`BUY WS AND TG API\` - এপিআই অ্যাক্সেস ও ডকুমেন্টেশন\n` +
-      `▫️ \`MY PROFILE\` - আপনার টেলিগ্রাম আইডি ও অ্যাকাউন্টের তথ্য\n` +
-      `▫️ \`MY PACKAGE\` - বর্তমান প্যাকেজ ও লিমিট\n` +
-      `▫️ \`/login <ফোন নম্বর>\` - পেয়ারিং কোড দিয়ে হোয়াটসঅ্যাপ লিঙ্ক করুন\n` +
-      `▫️ \`/check <ফোন নম্বর>\` - নম্বর চেক করুন\n` +
-      `▫️ \`/status\` - লিঙ্ককৃত অ্যাকাউন্টের বর্তমান অবস্থা দেখুন\n` +
-      `▫️ \`/logout <ফোন নম্বর>\` - অ্যাকাউন্ট মুছে ফেলুন\n` +
-      `▫️ ফাইল সেন্ড করুন - আনলিমিটেড বাল্ক নম্বর একসাথে চেক করার জন্য`;
+      `*How to use:*\n` +
+      `▫️ \`CONNECT WS CHECKER\` - Link your WhatsApp account with a pairing code\n` +
+      `▫️ \`CHECK WS NUMBER\` - How to verify and filter phone numbers\n` +
+      `▫️ \`BUY WS AND TG API\` - API license purchase & documentation\n` +
+      `▫️ \`MY PROFILE\` - View your account and gateway info\n` +
+      `▫️ \`MY PACKAGE\` - View current package tier & quotas\n` +
+      `▫️ \`/login <phone_number>\` - Pair a new WhatsApp gateway\n` +
+      `▫️ \`/check <phone_number>\` - Check an individual phone number\n` +
+      `▫️ \`/status\` - View connection health and active accounts\n` +
+      `▫️ \`/logout <phone_number>\` - Remove an account\n` +
+      `▫️ Upload .txt / .csv file - Process bulk number lists`;
     await sendTelegramMessage(chatId, helpMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
@@ -1167,35 +1866,44 @@ export async function handleTelegramMessage(message) {
     const userAccounts = accounts.filter((a) => a.addedByChatId === chatId);
 
     const profileMsg = 
-      `👤 *MY PROFILE (ব্যবহারকারী প্রোফাইল)*\n\n` +
-      `▫️ *নাম:* ${fullName}\n` +
-      `▫️ *ইউজারনেম:* ${username}\n` +
-      `▫️ *টেলিগ্রাম আইডি:* \`${chatId}\`\n` +
-      `▫️ *লিঙ্ককৃত হোয়াটসঅ্যাপ অ্যাকাউন্ট:* ${userAccounts.length > 0 ? userAccounts.length + " টি" : accounts.length + " টি (সিস্টেম শেয়ার্ড)"}\n` +
-      `▫️ *সক্রিয় গেটওয়ে:* ${currentActivePhone ? `🟢 +${currentActivePhone}` : "🔴 কোনো গেটওয়ে সক্রিয় নেই"}\n` +
-      `▫️ *অ্যাকাউন্ট স্ট্যাটাস:* 🟢 Active Verified User\n` +
-      `▫️ *সার্ভার কানেকশন:* ⚡ Online Multi-Node`;
+      `👤 *MY PROFILE*\n\n` +
+      `▫️ *Name:* ${fullName}\n` +
+      `▫️ *Username:* ${username}\n` +
+      `▫️ *Telegram ID:* \`${chatId}\`\n` +
+      `▫️ *Linked WhatsApp Accounts:* ${userAccounts.length > 0 ? userAccounts.length : accounts.length + " (System Shared)"}\n` +
+      `▫️ *Active Gateway:* ${currentActivePhone ? `🟢 +${currentActivePhone}` : "🔴 No active gateway"}\n` +
+      `▫️ *Account Tier:* ${currentUser.isPremium ? "💎 Premium API User" : "⚪ Free Standard User"}\n` +
+      `▫️ *Server Cluster:* ⚡ Online Multi-Node`;
     await sendTelegramMessage(chatId, profileMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
 
   if (text === "MY PACKAGE" || text.includes("MY PACKAGE")) {
+    const isPrem = currentUser.isPremium;
+    const pkgName = isPrem ? (currentUser.package || "Premium API Tier") : "Free Starter Tier";
+    const dailyLimit = isPrem ? "Unlimited checks / day" : "500 checks / day (Unlimited single checks)";
+    const batchLimit = isPrem ? "100,000 numbers per batch" : "10,000 numbers per batch";
+    const speed = isPrem ? "⚡ Hyper Fast Multi-Gateway (0.05s - 0.1s / number)" : "⚡ Ultra Fast (0.2s - 0.5s / number)";
+    const apiAccess = isPrem ? "🟢 Full REST API & Webhooks Access Enabled" : "🟡 Basic Rate-Limited Access";
+
     const pkgMsg = 
-      `📦 *MY PACKAGE (বর্তমান প্যাকেজ বিবরণ)*\n\n` +
-      `▫️ *প্যাকেজ নাম:* 🌟 Premium Starter Tier (সক্রিয়)\n` +
-      `▫️ *দৈনিক চেক লিমিট:* 500 টি / দিন (আনলিমিটেড সিঙ্গেল চেক)\n` +
-      `▫️ *বাল্ক ফাইল সাইজ:* 10,000 নম্বর প্রতি ব্যাচে\n` +
-      `▫️ *চেকিং স্পিড:* ⚡ আল্ট্রা ফাস্ট (0.2s - 0.5s/number)\n` +
-      `▫️ *API অ্যাক্সেস:* স্ট্যান্ডার্ড ইন্টিগ্রেশন এনাবল্ড\n` +
-      `▫️ *মেয়াদ:* ♾️ Lifetime Active\n\n` +
-      `💡 আনলিমিটেড এন্টারপ্রাইজ প্যাকেজে আপগ্রেড করতে মেনুর *BUY WS AND TG API* বাটন চাপুন।`;
+      `📦 *MY PACKAGE DETAILS*\n\n` +
+      `▫️ *Package:* ${isPrem ? "💎" : "🌟"} ${pkgName} ${isPrem ? "(Active License)" : "(Free Tier)"}\n` +
+      `▫️ *Daily Limit:* ${dailyLimit}\n` +
+      `▫️ *Bulk Batch Size:* ${batchLimit}\n` +
+      `▫️ *Checking Speed:* ${speed}\n` +
+      `▫️ *API Access:* ${apiAccess}\n` +
+      `▫️ *Validity:* ♾️ Lifetime Active\n\n` +
+      (isPrem 
+        ? `✅ *Your Premium API Package is active!* You have priority gateway throughput.` 
+        : `💡 To upgrade to an Unlimited Enterprise license, click *BUY WS AND TG API*.`);
     await sendTelegramMessage(chatId, pkgMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
 
   if (text === "ADMIN PANEL" || text.includes("ADMIN PANEL") || text === "/admin" || text.startsWith("/admin")) {
     if (String(chatId) !== ADMIN_CHAT_ID) {
-      await sendTelegramMessage(chatId, `⛔ *অ্যাক্সেস ডিনাইড:* অ্যাডমিন প্যানেল শুধুমাত্র নির্দিষ্ট অ্যাডমিনের (ID: \`${ADMIN_CHAT_ID}\`) জন্য উন্মুক্ত।`, "Markdown", getMainMenuKeyboard(chatId));
+      await sendTelegramMessage(chatId, `⛔ *Access Denied:* The Admin Panel is exclusively restricted to the designated admin (ID: \`${ADMIN_CHAT_ID}\`).`, "Markdown", getMainMenuKeyboard(chatId));
       return;
     }
     const adminMsg = getAdminPanelDashboardText();
@@ -1203,23 +1911,99 @@ export async function handleTelegramMessage(message) {
     return;
   }
 
+  // COMMAND: /users (Admin Only)
+  if (text === "/users" || text.startsWith("/users")) {
+    if (String(chatId) !== ADMIN_CHAT_ID) {
+      await sendTelegramMessage(chatId, "⛔ Access Denied: Admin only.");
+      return;
+    }
+    const users = getBotUsersList();
+    const { totalUsers, premiumUsers, freeUsers } = getUserStats();
+    let userMsg = 
+      `👥 <b>REGISTERED BOT USERS (${totalUsers})</b>\n\n` +
+      `💎 <b>Premium API Package:</b> ${premiumUsers}\n` +
+      `🌟 <b>Free Tier Users:</b> ${freeUsers}\n\n`;
+    
+    users.forEach((u, idx) => {
+      const badge = u.isPremium ? "💎 PREMIUM" : "⚪ FREE";
+      userMsg += `${idx + 1}. <b>${u.name}</b> (${u.username})\n   ▫️ ID: <code>${u.chatId}</code> | [${badge}]\n   ▫️ Package: <b>${u.package}</b>\n   ▫️ Last Active: <code>${new Date(u.lastActive).toLocaleDateString()}</code>\n\n`;
+    });
+
+    await sendTelegramMessage(chatId, userMsg, "HTML");
+    return;
+  }
+
+  // COMMAND: /setpremium <chat_id>
+  if (text.startsWith("/setpremium")) {
+    if (String(chatId) !== ADMIN_CHAT_ID) {
+      await sendTelegramMessage(chatId, "⛔ Access Denied: Admin only.");
+      return;
+    }
+    const parts = text.split(/\s+/);
+    const targetChatId = Number(parts[1]);
+    if (!targetChatId || isNaN(targetChatId)) {
+      await sendTelegramMessage(chatId, "⚠️ Usage: `/setpremium <chat_id>`\nExample: `/setpremium 123456789`");
+      return;
+    }
+    const updated = setBotUserPackage(targetChatId, true, "Premium API");
+    await sendTelegramMessage(
+      chatId,
+      `✅ <b>User Upgraded to Premium!</b>\n\n` +
+      `▫️ <b>Name:</b> ${updated.name}\n` +
+      `▫️ <b>Chat ID:</b> <code>${updated.chatId}</code>\n` +
+      `▫️ <b>Package:</b> 💎 Premium API Package (Active)\n` +
+      `▫️ <b>Granted:</b> ${new Date().toLocaleString()}`,
+      "HTML"
+    );
+    sendTelegramMessage(
+      targetChatId,
+      `🎉 <b>Congratulations!</b>\n\nYour account has been upgraded to the 💎 <b>Premium API Package</b> by the administrator!\n\nYou now have unlimited checks, priority gateway access, and full API privileges. Check details via <b>MY PACKAGE</b>.`,
+      "HTML"
+    ).catch(() => {});
+    return;
+  }
+
+  // COMMAND: /removepremium <chat_id>
+  if (text.startsWith("/removepremium")) {
+    if (String(chatId) !== ADMIN_CHAT_ID) {
+      await sendTelegramMessage(chatId, "⛔ Access Denied: Admin only.");
+      return;
+    }
+    const parts = text.split(/\s+/);
+    const targetChatId = Number(parts[1]);
+    if (!targetChatId || isNaN(targetChatId)) {
+      await sendTelegramMessage(chatId, "⚠️ Usage: `/removepremium <chat_id>`\nExample: `/removepremium 123456789`");
+      return;
+    }
+    const updated = setBotUserPackage(targetChatId, false, "Free");
+    await sendTelegramMessage(
+      chatId,
+      `✅ <b>User Downgraded!</b>\n\n` +
+      `▫️ <b>Name:</b> ${updated.name}\n` +
+      `▫️ <b>Chat ID:</b> <code>${updated.chatId}</code>\n` +
+      `▫️ <b>Package:</b> ⚪ Free Tier`,
+      "HTML"
+    );
+    return;
+  }
+
   // /login <phone>
   if (text.startsWith("/login")) {
     const raw = text.substring(6).trim();
     if (!raw) {
-      await sendTelegramMessage(chatId, "⚠️ অনুগ্রহ করে ফোন নম্বর লিখুন। যেমন: `/login 8801700000000`");
+      await sendTelegramMessage(chatId, "⚠️ Please provide a phone number. Example: `/login 8801700000000`");
       return;
     }
 
     const clean = normalizePhone(raw);
     if (clean.length < 8) {
-      await sendTelegramMessage(chatId, "⚠️ সঠিক আন্তর্জাতিক ফোন নম্বর লিখুন (৮-১৫ ডিজিট)।");
+      await sendTelegramMessage(chatId, "⚠️ Invalid phone number format. Example: `/login 8801700000000`");
       return;
     }
 
     await sendTelegramMessage(
       chatId,
-      `⌛ *+${clean}* নম্বরের জন্য হোয়াটসঅ্যাপ পেয়ারিং কোড জেনারেট হচ্ছে... দয়া করে ১০-১৫ সেকেন্ড অপেক্ষা করুন।`
+      `⌛ Generating WhatsApp pairing code for *+${clean}*... Please wait 10-15 seconds.`
     );
 
     const senderName = message.from?.first_name || message.chat?.first_name || "Telegram User";
@@ -1237,23 +2021,23 @@ export async function handleTelegramMessage(message) {
       if (sess && sess.status === "pairing-code-ready" && sess.pairingCode) {
         clearInterval(checkTimer);
         const codeMsg =
-          `🔑 *আপনার হোয়াটসঅ্যাপ পেয়ারিং কোড:* \n\n` +
+          `🔑 *Your WhatsApp Pairing Code:* \n\n` +
           `👉 \`${sess.pairingCode}\` 👈\n\n` +
-          `*কিভাবে ব্যবহার করবেন:*\n` +
-          `১. মোবাইলের WhatsApp অ্যাপ ওপেন করুন।\n` +
-          `২. ডান কোণের ৩-ডট মেনু > *Linked Devices* এ যান।\n` +
-          `৩. *Link a Device* এ ক্লিক করে নিচে *Link with phone number instead* চাপুন।\n` +
-          `৪. স্ক্রিনে কোডটি ইনপুট দিন।\n\n` +
-          `বটের সাথে একাউন্ট সফলভাবে সিঙ্ক হয়ে যাবে! 🚀`;
+          `*How to use:*\n` +
+          `1. Open WhatsApp on your phone.\n` +
+          `2. Tap the three-dot menu > *Linked Devices*.\n` +
+          `3. Tap *Link a Device* and select *Link with phone number instead* at the bottom.\n` +
+          `4. Enter the code above.\n\n` +
+          `Your account will sync with the bot automatically! 🚀`;
         await sendTelegramMessage(chatId, codeMsg);
       } else if (sess && sess.status === "error") {
         clearInterval(checkTimer);
-        await sendTelegramMessage(chatId, `❌ কোড জেনারেট করতে ব্যর্থ হয়েছে: ${sess.error || "সার্ভার রেসপন্স দেয়নি"}`);
+        await sendTelegramMessage(chatId, `❌ Failed to generate pairing code: ${sess.error || "Server did not respond"}`);
       } else if (counter >= maxWait) {
         clearInterval(checkTimer);
         await sendTelegramMessage(
           chatId,
-          `⏳ কোড আসতে দেরি হচ্ছে। অনুগ্রহ করে ৩০ সেকেন্ড পর \`/status\` কমান্ড দিয়ে চেক করুন।`
+          `⏳ Code generation is taking a moment. Please check in 30 seconds using \`/status\`.`
         );
       }
     }, 1000);
@@ -1264,20 +2048,20 @@ export async function handleTelegramMessage(message) {
   if (text.startsWith("/status")) {
     const saved = getSavedAccountsList();
     if (saved.length === 0) {
-      await sendTelegramMessage(chatId, "ℹ️ কোনো হোয়াটসঅ্যাপ অ্যাকাউন্ট লিঙ্ক করা নেই। লিঙ্ক করতে লিখুন: `/login <ফোন নম্বর>`");
+      await sendTelegramMessage(chatId, "ℹ️ No WhatsApp accounts linked yet. To connect an account, type: `/login <phone_number>`.");
       return;
     }
 
-    let statusMsg = `📊 *হোয়াটসঅ্যাপ কানেকশন স্ট্যাটাস:*\n\n`;
+    let statusMsg = `📊 *WhatsApp Connection Status:*\n\n`;
     saved.forEach((acc, idx) => {
       const s = activeSessions.get(acc.phone);
       const isOnline = s?.status === "connected";
       const icon = isOnline ? "🟢 Connected" : "🔴 Offline";
-      statusMsg += `${idx + 1}. *+${acc.phone}* (${acc.name || "WhatsApp User"})\n   স্ট্যাটাস: ${icon}\n`;
+      statusMsg += `${idx + 1}. *+${acc.phone}* (${acc.name || "WhatsApp User"})\n   Status: ${icon}\n`;
     });
 
     if (currentActivePhone) {
-      statusMsg += `\n🎯 *ডিফল্ট চেকার গেটওয়ে:* \`+${currentActivePhone}\``;
+      statusMsg += `\n🎯 *Default Runtime Gateway:* \`+${currentActivePhone}\``;
     }
 
     await sendTelegramMessage(chatId, statusMsg);
@@ -1288,16 +2072,16 @@ export async function handleTelegramMessage(message) {
   if (text.startsWith("/logout")) {
     const raw = text.substring(7).trim();
     if (!raw) {
-      await sendTelegramMessage(chatId, "⚠️ ফোন নম্বরটি লিখুন। যেমন: `/logout 8801700000000`");
+      await sendTelegramMessage(chatId, "⚠️ Please provide a phone number. Example: `/logout 8801700000000`");
       return;
     }
 
     const clean = normalizePhone(raw);
     const deleted = deleteAccountFromDb(clean);
     if (deleted) {
-      await sendTelegramMessage(chatId, `✅ *+${clean}* একাউন্টটি সফলভাবে মুছে ফেলা এবং ডিসকানেক্ট করা হয়েছে।`);
+      await sendTelegramMessage(chatId, `✅ *+${clean}* has been disconnected and removed from the database.`);
     } else {
-      await sendTelegramMessage(chatId, `⚠️ *+${clean}* একাউন্টটি তালিকায় খুঁজে পাওয়া যায়নি।`);
+      await sendTelegramMessage(chatId, `⚠️ *+${clean}* was not found in the database.`);
     }
     return;
   }
@@ -1306,7 +2090,7 @@ export async function handleTelegramMessage(message) {
   if (text.startsWith("/check")) {
     const raw = text.substring(6).trim();
     if (!raw) {
-      await sendTelegramMessage(chatId, "⚠️ ফোন নম্বর লিখুন। যেমন: `/check 8801712345678`");
+      await sendTelegramMessage(chatId, "⚠️ Please provide a phone number to check. Example: `/check 8801712345678`");
       return;
     }
     await checkAndRespondBatch(chatId, [raw]);
@@ -1320,7 +2104,7 @@ export async function handleTelegramMessage(message) {
   } else {
     await sendTelegramMessage(
       chatId,
-      "ℹ️ হোয়াটসঅ্যাপ নম্বর চেক করতে নম্বরটি মেসেজে লিখুন অথবা বিস্তারিত জানতে `/start` লিখুন।"
+      "ℹ️ Please send phone numbers to check or type `/start` to view the menu and command list."
     );
   }
 }
