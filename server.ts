@@ -1102,6 +1102,11 @@ export function getMainMenuKeyboard(chatId?: number | string) {
         text: "CHECK WS NUMBER",
         icon_custom_emoji_id: "5429612632430654504",
         style: "success"
+      },
+      {
+        text: "CHECK TG NUMBER",
+        icon_custom_emoji_id: "5429136513831057777",
+        style: "success"
       }
     ],
     [
@@ -1153,15 +1158,7 @@ export const ADMIN_PANEL_KEYBOARD = {
   inline_keyboard: [
     [
       {
-        text: "👥 USER & PACKAGE ANALYTICS",
-        icon_custom_emoji_id: "5764869872521581153",
-        callback_data: "manage_package_menu",
-        style: "primary"
-      }
-    ],
-    [
-      {
-        text: "💳 PAYMENT MANAGEMENT",
+        text: "𝗣𝗔𝗬𝗠𝗘𝗡𝗧 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧",
         icon_custom_emoji_id: "5429452906891880671",
         callback_data: "payment_management_menu",
         style: "primary"
@@ -1169,7 +1166,7 @@ export const ADMIN_PANEL_KEYBOARD = {
     ],
     [
       {
-        text: "⚙️ SETTINGS",
+        text: "𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦",
         icon_custom_emoji_id: "5420155432272438703",
         callback_data: "system_settings",
         style: "primary"
@@ -1214,14 +1211,6 @@ export const SETTINGS_MENU_KEYBOARD = {
         text: "𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧",
         icon_custom_emoji_id: "5764869872521581153",
         callback_data: "premium_management_menu",
-        style: "primary"
-      }
-    ],
-    [
-      {
-        text: "💳 PAYMENT MANAGEMENT",
-        icon_custom_emoji_id: "5429452906891880671",
-        callback_data: "payment_management_menu",
         style: "primary"
       }
     ],
@@ -1277,7 +1266,7 @@ export const MANAGE_PACKAGE_KEYBOARD = {
   inline_keyboard: [
     [
       {
-        text: "🔄 Refresh Stats",
+        text: "𝗥𝗘𝗙𝗥𝗘𝗦𝗛 𝗦𝗧𝗔𝗧𝗦",
         icon_custom_emoji_id: "5429136513831057777",
         callback_data: "manage_package_menu",
         style: "primary"
@@ -1742,7 +1731,7 @@ function getAdminPanelDashboardText(): string {
     `▫️ <code>/logout &lt;phone&gt;</code> - Disconnect and remove account\n` +
     `▫️ <code>/check &lt;phone&gt;</code> - Validate single phone number\n` +
     `▫️ Bulk File Upload - Process unlimited numbers via .txt/.csv\n\n` +
-    `👇 Click <b>SETTINGS</b> or <b>USER & PACKAGE ANALYTICS</b> below:`
+    `👇 Click <b>PAYMENT MANAGEMENT</b> or <b>SETTINGS</b> below:`
   );
 }
 
@@ -2152,12 +2141,24 @@ async function handleTelegramMessage(message: any) {
   if (text === "CHECK WS NUMBER" || text.includes("CHECK WS NUMBER")) {
     const checkGuideMsg = 
       `🔍 *CHECK WS NUMBER*\n\n` +
-      `Quick ways to check phone numbers:\n\n` +
-      `১️⃣ *Single Number:* Send \`/check <phone_number>\` (e.g. \`/check 8801712345678\`)\n` +
-      `২️⃣ *Quick Check:* Paste one or more numbers directly into the chat\n` +
-      `৩️⃣ *Bulk File Check:* Upload a \`.txt\` or \`.csv\` file with numbers\n\n` +
+      `Quick ways to check WhatsApp phone numbers:\n\n` +
+      `1️⃣ *Single Number:* Send \`/check <phone_number>\` (e.g. \`/check 8801712345678\`)\n` +
+      `2️⃣ *Quick Check:* Paste one or more numbers directly into the chat\n` +
+      `3️⃣ *Bulk File Check:* Upload a \`.txt\` or \`.csv\` file with numbers\n\n` +
       `The bot will filter active and inactive WhatsApp accounts instantly! ⚡`;
     await sendTelegramMessage(chatId, checkGuideMsg, "Markdown", getMainMenuKeyboard(chatId));
+    return;
+  }
+
+  if (text === "CHECK TG NUMBER" || text.includes("CHECK TG NUMBER")) {
+    const checkTgGuideMsg = 
+      `🔍 *CHECK TG NUMBER*\n\n` +
+      `Quick ways to check Telegram phone numbers:\n\n` +
+      `1️⃣ *Single Number:* Send the phone number with country code\n` +
+      `2️⃣ *Quick Check:* Paste one or more numbers directly into the chat\n` +
+      `3️⃣ *Bulk File Check:* Upload a \`.txt\` or \`.csv\` file with numbers\n\n` +
+      `The bot will verify active and inactive Telegram accounts at high speed! ⚡`;
+    await sendTelegramMessage(chatId, checkTgGuideMsg, "Markdown", getMainMenuKeyboard(chatId));
     return;
   }
 
