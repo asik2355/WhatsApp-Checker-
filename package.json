@@ -9,6 +9,7 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "preview": "vite preview",
+    "bot": "node bot.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

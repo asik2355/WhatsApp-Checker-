@@ -24,6 +24,64 @@ interface WAState {
   error: string | null;
 }
 
+// --- VPS LOG CAPTURE RING BUFFER ---
+export interface VpsLogEntry {
+  id: number;
+  time: string;
+  level: "info" | "warn" | "error" | "cmd" | "bot" | "wa";
+  message: string;
+}
+
+const vpsLogs: VpsLogEntry[] = [];
+let logIdCounter = 1;
+
+export function addVpsLog(level: VpsLogEntry["level"], message: string) {
+  const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+  vpsLogs.push({
+    id: logIdCounter++,
+    time,
+    level,
+    message,
+  });
+  if (vpsLogs.length > 600) {
+    vpsLogs.shift();
+  }
+}
+
+// Hook into console.log, console.warn, console.error
+const origConsoleLog = console.log;
+const origConsoleWarn = console.warn;
+const origConsoleError = console.error;
+
+console.log = (...args: any[]) => {
+  origConsoleLog(...args);
+  try {
+    const msg = args.map(a => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+    const level: VpsLogEntry["level"] = msg.includes("[Telegram") ? "bot" : msg.includes("[Baileys") || msg.includes("[Connection") ? "wa" : "info";
+    addVpsLog(level, msg);
+  } catch {}
+};
+
+console.warn = (...args: any[]) => {
+  origConsoleWarn(...args);
+  try {
+    const msg = args.map(a => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+    addVpsLog("warn", msg);
+  } catch {}
+};
+
+console.error = (...args: any[]) => {
+  origConsoleError(...args);
+  try {
+    const msg = args.map(a => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+    addVpsLog("error", msg);
+  } catch {}
+};
+
+addVpsLog("info", `🐧 [Linux VPS] Ubuntu 22.04 LTS (x86_64) - Node.js ${process.version} environment active`);
+addVpsLog("info", `📁 [Workspace] Standalone bot file ready at /app/applet/bot.js`);
+
+
 // Map key = phone (stripped digits), value = Active Baileys session
 interface ConnectedSession {
   phoneNumber: string;
@@ -595,7 +653,16 @@ async function initWhatsApp(phoneNumber: string, isReconnect = false) {
 }
 
 // --- TELEGRAM BOT SERVICE ---
-let TG_TOKEN = "8338208274:AAFDAeCyx5kEVaKXLf8sHmRbzsNbAjH3bAU";
+let TG_TOKEN = "8887360085:AAGFnQjUY1lnmDwHJTFo3T7O56xFEW9poGU";
+
+export const tgBotInfo = {
+  username: "checking...",
+  id: "",
+  name: "Linkify Bot",
+  status: "initializing",
+  token: TG_TOKEN,
+  lastPing: new Date().toISOString()
+};
 
 // Dynamically sync and prioritize the custom bot token from ws.py or .env
 try {
@@ -605,11 +672,13 @@ try {
     const pyMatch = pyContent.match(/TG_TOKEN\s*=\s*["']([^"']+)["']/);
     if (pyMatch && pyMatch[1]) {
       TG_TOKEN = pyMatch[1].trim();
+      tgBotInfo.token = TG_TOKEN;
       console.log(`[Telegram Bot] Successfully synced and applied TG_TOKEN from ws.py: ${TG_TOKEN.substring(0, 8)}...`);
     }
   }
   if (process.env.TG_TOKEN) {
     TG_TOKEN = process.env.TG_TOKEN.trim();
+    tgBotInfo.token = TG_TOKEN;
     console.log(`[Telegram Bot] Applied TG_TOKEN from environment variables: ${TG_TOKEN.substring(0, 8)}...`);
   }
 } catch (e: any) {
@@ -618,16 +687,59 @@ try {
 
 let TG_API_URL = `https://api.telegram.org/bot${TG_TOKEN}`;
 
-async function sendTelegramMessage(chatId: number, text: string, parseMode = "Markdown"): Promise<number | null> {
+export const MAIN_MENU_KB = {
+  keyboard: [
+    [
+      {
+        text: "CONNECT WS CHECKER",
+        icon_custom_emoji_id: "5429612632430654504",
+        style: "primary"
+      }
+    ],
+    [
+      {
+        text: "CHECK WS NUMBER",
+        icon_custom_emoji_id: "5429612632430654504",
+        style: "success"
+      }
+    ],
+    [
+      {
+        text: "BUY PACKAGE",
+        icon_custom_emoji_id: "5170692113834181832",
+        style: "success"
+      },
+      {
+        text: "HELP",
+        icon_custom_emoji_id: "5832352677849205948",
+        style: "primary"
+      }
+    ],
+    [
+      {
+        text: "ADMIN PANEL",
+        icon_custom_emoji_id: "5764869872521581153",
+        style: "danger"
+      }
+    ]
+  ],
+  resize_keyboard: true
+};
+
+async function sendTelegramMessage(chatId: number, text: string, parseMode = "Markdown", replyMarkup: any = MAIN_MENU_KB): Promise<number | null> {
   try {
+    const payload: any = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: parseMode,
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
     const response = await fetch(`${TG_API_URL}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        parse_mode: parseMode,
-      }),
+      body: JSON.stringify(payload),
     });
     if (response.ok) {
       const data = await response.json();
@@ -696,11 +808,18 @@ async function startTelegramBot() {
     if (meResp.status === 200) {
       const meData = await meResp.json() as any;
       const botUser = meData?.result?.username || "Unknown";
+      tgBotInfo.username = botUser;
+      tgBotInfo.id = String(meData?.result?.id || "");
+      tgBotInfo.name = meData?.result?.first_name || "Bot";
+      tgBotInfo.status = "online";
+      tgBotInfo.lastPing = new Date().toISOString();
       console.log(`[Telegram Bot] Connected successfully to bot: @${botUser} (ID: ${meData?.result?.id})`);
     } else {
+      tgBotInfo.status = "error";
       console.warn(`[Telegram Bot] WARNING: getMe returned status ${meResp.status} - ${await meResp.text()}`);
     }
   } catch (e) {
+    tgBotInfo.status = "error";
     console.error(`[Telegram Bot] Exception during webhook reset / getMe:`, e);
   }
 
@@ -798,14 +917,82 @@ async function handleTelegramMessage(message: any) {
   if (text.startsWith("/start")) {
     const startMsg = 
       `👋 *স্বাগতম! আমি আপনার লিঙ্কফাই হোয়াটসঅ্যাপ রোবট (Linkify Bot)।*\n\n` +
-      `আপনার টেলিগ্রাম বট থেকে সরাসরি হোয়াটসঅ্যাপ লগইন এবং নম্বর চেক করতে পারবেন।\n\n` +
-      `📌 *কমান্ডসমূহ (Commands):*\n` +
-      `▫️ \`/login <ফোন নম্বর>\` - নতুন কোনো হোয়াটসঅ্যাপ অ্যাকাউন্ট লিঙ্ক করার জন্য কোড জেনারেট করুন। (যেমন: \`/login 8801700000000\`)\n` +
-      `▫️ \`/check <ফোন নম্বর>\` - কোনো একটি নাম্বারের হোয়াটসঅ্যাপ আইডি আছে কিনা চেক করুন। (যেমন: \`/check 8801712345678\`)\n` +
-      `▫️ \`/status\` - লিঙ্ককৃত হোয়াটসঅ্যাপ এ্যাকাউন্ট এবং কানেকশন স্ট্যাটাস দেখার জন্য।\n` +
-      `▫️ \`/logout <ফোন নম্বর>\` - কোনো অ্যাকাউন্ট মুছে ফেলার জন্য। (যেমন: \`/logout 8801700000000\`)\n\n` +
-      `💡 *বাল্ক হোয়াটসঅ্যাপ চেক:* যেকোনো সাধারণ মেসেজে এক বা একাধিক মোবাইল নম্বর একসাথে পাঠালে অথবা কোনো টেক্সট/সিএসভি ফাইল আপলোড করলে আমি অটো চেক করে একটি চমৎকার রিপোর্ট পাঠিয়ে দেবো!`;
-    await sendTelegramMessage(chatId, startMsg);
+      `আপনার টেলিগ্রাম বট থেকে সরাসরি হোয়াটসঅ্যাপ লগইন এবং নম্বর চেক করতে পারবেন। নিচের মেনু বাটনগুলো ব্যবহার করুন:\n\n` +
+      `🔘 *CONNECT WS CHECKER* - হোয়াটসঅ্যাপ লিঙ্ক করার পেয়ারিং কোড নিন\n` +
+      `🔘 *CHECK WS NUMBER* - হোয়াটসঅ্যাপ নম্বর চেক নির্দেশিকা\n` +
+      `🔘 *BUY PACKAGE* - প্রিমিয়াম প্যাকেজ ও ক্রেডিট\n` +
+      `🔘 *HELP* - সহায়তা এবং সকল কমান্ড\n` +
+      `🔘 *ADMIN PANEL* - সিস্টেম অ্যাডমিন কন্ট্রোল প্যানেল\n\n` +
+      `📌 *সরাসরি কমান্ডসমূহ (Commands):*\n` +
+      `▫️ \`/login <ফোন নম্বর>\` - হোয়াটসঅ্যাপ লিঙ্ক করার পেয়ারিং কোড পান।\n` +
+      `▫️ \`/check <ফোন নম্বর>\` - যেকোনো নম্বর দ্রুত চেক করুন।\n` +
+      `▫️ \`/status\` - লিঙ্ককৃত অ্যাকাউন্টের লাইভ স্ট্যাটাস দেখুন।\n` +
+      `▫️ \`/logout <ফোন নম্বর>\` - অ্যাকাউন্ট মুছে ফেলুন।\n\n` +
+      `💡 *বাল্ক হোয়াটসঅ্যাপ চেক:* যেকোনো মেসেজে একাধিক মোবাইল নম্বর একসাথে পাঠান অথবা কোনো \`.txt\` / \`.csv\` ফাইল সেন্ড করুন!`;
+    await sendTelegramMessage(chatId, startMsg, "Markdown", MAIN_MENU_KB);
+    return;
+  }
+
+  // --- MENU BUILDER BUTTON ACTIONS ---
+  if (text === "CONNECT WS CHECKER" || text.includes("CONNECT WS CHECKER")) {
+    const connectMsg = 
+      `🔗 *CONNECT WS CHECKER*\n\n` +
+      `আপনার হোয়াটসঅ্যাপ অ্যাকাউন্ট বটের সাথে কানেক্ট করতে নিচের নিয়মে কমান্ড দিন:\n` +
+      `👉 \`/login <ফোন নম্বর>\`\n\n` +
+      `*উদাহরণ:*\n` +
+      `\`/login 8801700000000\`\n\n` +
+      `ℹ️ কমান্ড পাঠালে আপনি একটি ৮-ডিজিটের পেয়ারিং কোড পাবেন যা দিয়ে মোবাইলের WhatsApp অ্যাপ থেকে *Linked Devices* এ গিয়ে লিঙ্ক করতে পারবেন।`;
+    await sendTelegramMessage(chatId, connectMsg, "Markdown", MAIN_MENU_KB);
+    return;
+  }
+
+  if (text === "CHECK WS NUMBER" || text.includes("CHECK WS NUMBER")) {
+    const checkGuideMsg = 
+      `🔍 *CHECK WS NUMBER*\n\n` +
+      `হোয়াটসঅ্যাপ নম্বর চেক করার বিভিন্ন সহজ উপায়:\n\n` +
+      `১️⃣ *সিঙ্গেল নম্বর:* কমান্ড দিন \`/check <ফোন নম্বর>\` (যেমন: \`/check 8801712345678\`)\n` +
+      `২️⃣ *দ্রুত চেক:* এক বা একাধিক নম্বর সরাসরি মেসেজে লিখে পাঠিয়ে দিন\n` +
+      `৩️⃣ *বাল্ক ফাইল চেক:* নম্বরগুলোর একটি \`.txt\` বা \`.csv\` ফাইল এখানে আপলোড দিন\n\n` +
+      `বট সাথে সাথে ফিল্টার করে সক্রিয় ও নিষ্ক্রিয় তালিকা জানিয়ে দেবে! ⚡`;
+    await sendTelegramMessage(chatId, checkGuideMsg, "Markdown", MAIN_MENU_KB);
+    return;
+  }
+
+  if (text === "BUY PACKAGE" || text.includes("BUY PACKAGE")) {
+    const buyPkgMsg = 
+      `💎 *BUY PACKAGE*\n\n` +
+      `আমাদের প্রিমিয়াম প্যাকেজ ও ক্রেডিট প্ল্যান শীঘ্রই যুক্ত হচ্ছে।\n` +
+      `বিস্তারিত তথ্য ও কাস্টম প্ল্যানের জন্য অ্যাডমিনের সাথে যোগাযোগ রাখুন।`;
+    await sendTelegramMessage(chatId, buyPkgMsg, "Markdown", MAIN_MENU_KB);
+    return;
+  }
+
+  if (text === "HELP" || text.includes("HELP")) {
+    const helpMsg = 
+      `📖 *HELP & GUIDELINES*\n\n` +
+      `*কিভাবে ব্যবহার করবেন:*\n` +
+      `▫️ \`CONNECT WS CHECKER\` - হোয়াটসঅ্যাপ অ্যাকাউন্ট যুক্ত করার নিয়মাবলী\n` +
+      `▫️ \`CHECK WS NUMBER\` - নম্বর ফিল্টার ও ভেরিফিকেশন করার গাইড\n` +
+      `▫️ \`/login <ফোন নম্বর>\` - পেয়ারিং কোড দিয়ে হোয়াটসঅ্যাপ লিঙ্ক করুন\n` +
+      `▫️ \`/check <ফোন নম্বর>\` - নম্বর চেক করুন\n` +
+      `▫️ \`/status\` - লিঙ্ককৃত অ্যাকাউন্টের বর্তমান অবস্থা দেখুন\n` +
+      `▫️ \`/logout <ফোন নম্বর>\` - অ্যাকাউন্ট মুছে ফেলুন\n` +
+      `▫️ ফাইল সেন্ড করুন - আনলিমিটেড বাল্ক নম্বর একসাথে চেক করার জন্য`;
+    await sendTelegramMessage(chatId, helpMsg, "Markdown", MAIN_MENU_KB);
+    return;
+  }
+
+  if (text === "ADMIN PANEL" || text.includes("ADMIN PANEL")) {
+    const accounts = getSavedAccountsList();
+    const adminMsg = 
+      `⚙️ *ADMIN PANEL*\n\n` +
+      `স্বাগতম অ্যাডমিন প্যানেলে।\n\n` +
+      `📊 *বর্তমান সিস্টেম অবস্থা:*\n` +
+      `▫️ একটিভ গেটওয়ে: ${currentActivePhone ? `🟢 +${currentActivePhone}` : "🔴 কোনো সক্রিয় অ্যাকাউন্ট নেই"}\n` +
+      `▫️ মোট সংরক্ষিত অ্যাকাউন্ট: ${accounts.length} টি\n` +
+      `▫️ টেলিগ্রাম বট স্ট্যাটাস: 🟢 অনলাইন (@${tgBotInfo.username || "LinkViral_Xbot"})\n\n` +
+      `বিস্তারিত অ্যাডমিন কনফিগারেশন শীঘ্রই যোগ করা হচ্ছে।`;
+    await sendTelegramMessage(chatId, adminMsg, "Markdown", MAIN_MENU_KB);
     return;
   }
 
@@ -1716,6 +1903,240 @@ app.post("/api/delete-account", (req, res) => {
   const success = deleteAccountFromDb(phone);
   res.json({ success });
 });
+
+// ============================================================================
+// LIVE VPS TERMINAL & BOT TESTER API ENDPOINTS
+// ============================================================================
+
+app.get("/api/vps/status", (req, res) => {
+  const mem = process.memoryUsage();
+  res.json({
+    uptime: Math.floor(process.uptime()),
+    memoryMb: Math.round(mem.rss / 1024 / 1024),
+    heapMb: Math.round(mem.heapUsed / 1024 / 1024),
+    nodeVersion: process.version,
+    platform: `${process.platform} ${process.arch}`,
+    tgBotInfo,
+    activeSessionsCount: activeSessions.size,
+    savedAccountsCount: getSavedAccountsList().length,
+    activePhones: Array.from(activeSessions.keys()),
+  });
+});
+
+app.get("/api/vps/logs", (req, res) => {
+  const since = Number(req.query.since || 0);
+  const filtered = since > 0 ? vpsLogs.filter(l => l.id > since) : vpsLogs.slice(-150);
+  res.json({
+    logs: filtered,
+    lastId: vpsLogs.length > 0 ? vpsLogs[vpsLogs.length - 1].id : 0
+  });
+});
+
+app.get("/api/vps/bot-code", (req, res) => {
+  const botPath = path.join(process.cwd(), "bot.js");
+  if (fs.existsSync(botPath)) {
+    const code = fs.readFileSync(botPath, "utf-8");
+    res.json({ code, filename: "bot.js" });
+  } else {
+    res.status(404).json({ error: "bot.js not found" });
+  }
+});
+
+app.post("/api/vps/command", async (req, res) => {
+  const { command } = req.body;
+  if (!command || typeof command !== "string") {
+    return res.status(400).json({ error: "Command string is required." });
+  }
+
+  const trimmed = command.trim();
+  addVpsLog("cmd", `$ ${trimmed}`);
+
+  if (trimmed === "clear") {
+    vpsLogs.length = 0;
+    addVpsLog("info", "Console output buffer cleared.");
+    return res.json({ success: true, output: "Console buffer cleared." });
+  }
+
+  if (trimmed === "help") {
+    const helpOutput = [
+      "🖥️ Available VPS & Bot Commands:",
+      "  • menu                : View active Telegram ReplyKeyboardMarkup buttons",
+      "  • /login <phone>      : Request WhatsApp pairing code via Baileys and Telegram",
+      "  • /check <phone>      : Verify if a phone number has an active WhatsApp account",
+      "  • /status             : View active WhatsApp accounts and Telegram Bot state",
+      "  • node bot.js         : Run bot diagnostics & test Telegram API connectivity",
+      "  • test-tg / ping      : Ping Telegram Bot API (getMe) and refresh connection",
+      "  • ls                  : List project files in VPS directory",
+      "  • clear               : Clear terminal log buffer",
+      "  • cat package.json    : View applet dependencies and scripts"
+    ].join("\n");
+    addVpsLog("info", helpOutput);
+    return res.json({ success: true, output: helpOutput });
+  }
+
+  if (trimmed === "menu" || trimmed === "/menu") {
+    const menuOut = [
+      "📱 [Telegram Bot Menu Builder Buttons]:",
+      "  [1] CONNECT WS CHECKER (icon: 5429612632430654504, style: primary)",
+      "  [2] CHECK WS NUMBER (icon: 5429612632430654504, style: success)",
+      "  [3] BUY PACKAGE (icon: 5170692113834181832, style: success) | HELP (icon: 5832352677849205948, style: primary)",
+      "  [4] ADMIN PANEL (icon: 5764869872521581153, style: danger)",
+      "  -> resize_keyboard: true"
+    ].join("\n");
+    addVpsLog("bot", menuOut);
+    return res.json({ success: true, output: menuOut });
+  }
+
+  if (trimmed === "CONNECT WS CHECKER") {
+    const out = "🔗 [Bot Menu Response] CONNECT WS CHECKER -> Prompted /login <phone> to pair WhatsApp account.";
+    addVpsLog("bot", out);
+    return res.json({ success: true, output: out });
+  }
+
+  if (trimmed === "CHECK WS NUMBER") {
+    const out = "🔍 [Bot Menu Response] CHECK WS NUMBER -> Prompted /check <phone>, raw numbers, or .txt file upload.";
+    addVpsLog("bot", out);
+    return res.json({ success: true, output: out });
+  }
+
+  if (trimmed === "BUY PACKAGE") {
+    const out = "💎 [Bot Menu Response] BUY PACKAGE -> Packages and credits coming soon.";
+    addVpsLog("bot", out);
+    return res.json({ success: true, output: out });
+  }
+
+  if (trimmed === "ADMIN PANEL") {
+    const out = `⚙️ [Bot Menu Response] ADMIN PANEL -> Active gateway: ${currentActivePhone || "None"}, Saved accounts: ${getSavedAccountsList().length}`;
+    addVpsLog("bot", out);
+    return res.json({ success: true, output: out });
+  }
+
+  if (trimmed === "ls" || trimmed === "dir") {
+    try {
+      const files = fs.readdirSync(process.cwd()).filter(f => !f.startsWith(".") && f !== "node_modules");
+      const out = files.join("   ");
+      addVpsLog("info", out);
+      return res.json({ success: true, output: out });
+    } catch (e: any) {
+      addVpsLog("error", `ls error: ${e.message}`);
+      return res.json({ success: false, output: e.message });
+    }
+  }
+
+  if (trimmed === "status" || trimmed === "/status") {
+    const accounts = getSavedAccountsList();
+    const out = [
+      `📊 [VPS Status Report]`,
+      `  • Node.js: ${process.version} | Platform: ${process.platform} ${process.arch}`,
+      `  • Uptime: ${Math.floor(process.uptime())}s | Memory RSS: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`,
+      `  • Telegram Bot: @${tgBotInfo.username} (ID: ${tgBotInfo.id || "N/A"}) - ${tgBotInfo.status.toUpperCase()}`,
+      `  • Active WA Sessions: ${activeSessions.size} | Saved in DB: ${accounts.length}`,
+      `  • Accounts: ${accounts.map(a => `+${a.phone} (${a.name})`).join(", ") || "None"}`
+    ].join("\n");
+    addVpsLog("info", out);
+    return res.json({ success: true, output: out });
+  }
+
+  if (trimmed === "test-tg" || trimmed === "ping" || trimmed === "node bot.js" || trimmed === "npm run bot") {
+    addVpsLog("bot", `[VPS Runner] Executing test cycle on Telegram Bot (@${tgBotInfo.username})...`);
+    try {
+      const resp = await fetch(`${TG_API_URL}/getMe`);
+      if (resp.ok) {
+        const d = await resp.json() as any;
+        tgBotInfo.username = d.result?.username || "Unknown";
+        tgBotInfo.id = String(d.result?.id || "");
+        tgBotInfo.name = d.result?.first_name || "Bot";
+        tgBotInfo.status = "online";
+        tgBotInfo.lastPing = new Date().toISOString();
+        const successMsg = `✅ [Telegram Bot OK] Connected to @${tgBotInfo.username} (Name: ${tgBotInfo.name}, ID: ${tgBotInfo.id}). Polling is active and working!`;
+        addVpsLog("bot", successMsg);
+        return res.json({ success: true, output: successMsg });
+      } else {
+        const errMsg = `❌ [Telegram Bot Error] Status ${resp.status}: ${await resp.text()}`;
+        addVpsLog("error", errMsg);
+        return res.json({ success: false, output: errMsg });
+      }
+    } catch (e: any) {
+      const errMsg = `❌ [Telegram Connection Error] ${e.message}`;
+      addVpsLog("error", errMsg);
+      return res.json({ success: false, output: errMsg });
+    }
+  }
+
+  if (trimmed.startsWith("/login ") || trimmed.startsWith("login ")) {
+    const rawNum = trimmed.replace(/^\/?login\s+/, "").trim();
+    const cleanNum = normalizePhone(rawNum);
+    if (!cleanNum || cleanNum.length < 8) {
+      const err = `❌ Invalid phone number. Please provide standard phone like: /login 8801700000000`;
+      addVpsLog("error", err);
+      return res.json({ success: false, output: err });
+    }
+    addVpsLog("wa", `📱 Requesting WhatsApp pairing code for +${cleanNum}...`);
+    try {
+      initWhatsApp(cleanNum, false);
+      const out = `⏳ Initiated WhatsApp pairing handshake for +${cleanNum}. Check logs in ~2 seconds for pairing code!`;
+      addVpsLog("info", out);
+      return res.json({ success: true, output: out });
+    } catch (e: any) {
+      const err = `❌ Pairing request failed: ${e.message}`;
+      addVpsLog("error", err);
+      return res.json({ success: false, output: err });
+    }
+  }
+
+  if (trimmed.startsWith("/check ") || trimmed.startsWith("check ")) {
+    const rawNum = trimmed.replace(/^\/?check\s+/, "").trim();
+    const cleanNum = normalizePhone(rawNum);
+    if (!cleanNum || cleanNum.length < 8) {
+      const err = `❌ Invalid phone number. Usage: /check 8801700000000`;
+      addVpsLog("error", err);
+      return res.json({ success: false, output: err });
+    }
+
+    addVpsLog("wa", `🔍 Checking WhatsApp registration for +${cleanNum}...`);
+
+    let sockToUse: any = null;
+    if (activeSock && sessionState.status === "connected") {
+      sockToUse = activeSock;
+    } else {
+      for (const [_, sess] of activeSessions.entries()) {
+        if (sess.status === "connected" && sess.sock) {
+          sockToUse = sess.sock;
+          break;
+        }
+      }
+    }
+
+    if (!sockToUse) {
+      const err = `⚠️ No active WhatsApp connection found. Connect a WhatsApp account first via Web UI or /login <phone> before checking numbers.`;
+      addVpsLog("warn", err);
+      return res.json({ success: false, output: err });
+    }
+
+    try {
+      const result = await sockToUse.onWhatsApp(cleanNum);
+      const target = result && result.length > 0 ? result[0] : null;
+      if (target && target.exists) {
+        const out = `✅ [WhatsApp Check: Active] +${cleanNum} is registered on WhatsApp!\n   JID: ${target.jid}`;
+        addVpsLog("wa", out);
+        return res.json({ success: true, output: out, exists: true, jid: target.jid });
+      } else {
+        const out = `❌ [WhatsApp Check: Inactive] +${cleanNum} is NOT registered on WhatsApp.`;
+        addVpsLog("warn", out);
+        return res.json({ success: true, output: out, exists: false });
+      }
+    } catch (e: any) {
+      const err = `❌ Check failed: ${e.message}`;
+      addVpsLog("error", err);
+      return res.json({ success: false, output: err });
+    }
+  }
+
+  const feedback = `Command received: "${trimmed}". Type "help" to see available VPS commands.`;
+  addVpsLog("info", feedback);
+  res.json({ success: true, output: feedback });
+});
+
 
 // Setup Vite and Static Servers
 async function startServer() {

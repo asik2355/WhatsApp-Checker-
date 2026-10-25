@@ -3,9 +3,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Laptop, Smartphone, Lock, RefreshCw, Send, CheckCheck, 
   MessageSquare, UserPlus, LogOut, Copy, Check, MessageCircle, AlertTriangle, HelpCircle, Activity,
-  Globe, ChevronDown, Search, Download, Users
+  Globe, ChevronDown, Search, Download, Users, Terminal, FileCode
 } from 'lucide-react';
 import { ConnectionState, Chat, Message } from './types';
+import { VpsConsole } from './VpsConsole';
+import { BotCodeViewer } from './BotCodeViewer';
+
 
 interface Country {
   name: string;
@@ -88,6 +91,7 @@ const COUNTRIES: Country[] = [
 
 export default function App() {
   const [language, setLanguage] = useState<'bn' | 'en'>('bn');
+  const [mainTab, setMainTab] = useState<'vps' | 'web' | 'code'>('vps');
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [pairingCode, setPairingCode] = useState<string>('');
   
@@ -792,12 +796,74 @@ export default function App() {
           </div>
         </header>
 
-        {/* Dynamic Display Area based on connection state */}
-        <div className="flex-1 flex flex-col justify-center">
-          <AnimatePresence mode="wait">
+        {/* Navigation Tabs (Live VPS Console | WhatsApp Web | bot.js Code) */}
+        <div className="flex items-center justify-between gap-2 mb-6 border-b border-slate-800/80 pb-3 flex-wrap">
+          <div className="flex items-center gap-1.5 p-1 bg-[#111b21] rounded-2xl border border-slate-800 flex-wrap">
+            <button
+              onClick={() => setMainTab('vps')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                mainTab === 'vps' 
+                  ? 'bg-emerald-600 text-gray-950 shadow-md font-extrabold' 
+                  : 'text-slate-400 hover:text-gray-200 hover:bg-[#202c33]'
+              }`}
+            >
+              <Terminal className="w-4 h-4" />
+              <span>{language === 'bn' ? '🖥️ লাইভ VPS কনসোল' : '🖥️ Live VPS Console'}</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-300 animate-ping inline-block"></span>
+            </button>
 
-            {/* STATUS 1: DISCONNECTED LANDING (Phone Input Box) */}
-            {connectionState === 'disconnected' && (
+            <button
+              onClick={() => setMainTab('web')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                mainTab === 'web' 
+                  ? 'bg-emerald-600 text-gray-950 shadow-md font-extrabold' 
+                  : 'text-slate-400 hover:text-gray-200 hover:bg-[#202c33]'
+              }`}
+            >
+              <Smartphone className="w-4 h-4" />
+              <span>{language === 'bn' ? '📱 হোয়াটসঅ্যাপ ওয়েব ক্লায়েন্ট' : '📱 WhatsApp Web Client'}</span>
+            </button>
+
+            <button
+              onClick={() => setMainTab('code')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                mainTab === 'code' 
+                  ? 'bg-emerald-600 text-gray-950 shadow-md font-extrabold' 
+                  : 'text-slate-400 hover:text-gray-200 hover:bg-[#202c33]'
+              }`}
+            >
+              <FileCode className="w-4 h-4" />
+              <span>{language === 'bn' ? '📄 bot.js কোড' : '📄 bot.js Code'}</span>
+            </button>
+          </div>
+
+          <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span className="text-emerald-400 font-bold">NODE.JS ENGINE ONLINE</span>
+          </div>
+        </div>
+
+        {/* Dynamic Display Area based on selected tab and connection state */}
+        <div className="flex-1 flex flex-col justify-center">
+          {mainTab === 'vps' && (
+            <VpsConsole
+              language={language}
+              onSwitchToCode={() => setMainTab('code')}
+              onSwitchToWeb={() => setMainTab('web')}
+            />
+          )}
+
+          {mainTab === 'code' && (
+            <BotCodeViewer
+              language={language}
+              onSwitchToVps={() => setMainTab('vps')}
+            />
+          )}
+
+          {mainTab === 'web' && (
+            <AnimatePresence mode="wait">
+              {/* STATUS 1: DISCONNECTED LANDING (Phone Input Box) */}
+              {connectionState === 'disconnected' && (
               <motion.div
                 key="disconnected-landing"
                 initial={{ opacity: 0, y: 15 }}
@@ -2176,8 +2242,8 @@ export default function App() {
 
               </motion.div>
             )}
-
           </AnimatePresence>
+        )}
         </div>
 
         {/* Footer info links inside workspace */}

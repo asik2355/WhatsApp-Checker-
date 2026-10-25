@@ -34,7 +34,7 @@ browser_instance = None
 DB_FILE = "db_accounts.json"
 
 # --- TELEGRAM BOT CONSTANTS & STATE ---
-TG_TOKEN = "8338208274:AAFDAeCyx5kEVaKXLf8sHmRbzsNbAjH3bAU"
+TG_TOKEN = "8887360085:AAGFnQjUY1lnmDwHJTFo3T7O56xFEW9poGU"
 TG_API_URL = f"https://api.telegram.org/bot{TG_TOKEN}"
 linking_owners: Dict[str, dict] = {}
 
@@ -331,16 +331,60 @@ async def api_delete_account(body: DeleteAccountBody):
 
 # --- TELEGRAM BOT SERVICES ---
 
-async def send_telegram_message(chat_id: int, text: str, parse_mode: str = "Markdown") -> Optional[int]:
+_MAIN_MENU_KB = {
+    "keyboard": [
+        [
+            {
+                "text": "CONNECT WS CHECKER",
+                "icon_custom_emoji_id": "5429612632430654504",
+                "style": "primary"
+            },
+        ],
+        [
+            {
+                "text": "CHECK WS NUMBER",
+                "icon_custom_emoji_id": "5429612632430654504",
+                "style": "success"
+            },
+        ],
+        [
+            {
+                "text": "BUY PACKAGE",
+                "icon_custom_emoji_id": "5170692113834181832",
+                "style": "success"
+            },
+            {
+                "text": "HELP",
+                "icon_custom_emoji_id": "5832352677849205948",
+                "style": "primary"
+            },
+        ],
+        [
+            {
+                "text": "ADMIN PANEL",
+                "icon_custom_emoji_id": "5764869872521581153",
+                "style": "danger"
+            },
+        ],
+    ],
+    "resize_keyboard": True
+}
+
+async def send_telegram_message(chat_id: int, text: str, parse_mode: str = "Markdown", reply_markup: Optional[dict] = None) -> Optional[int]:
     try:
         async with httpx.AsyncClient() as client:
+            payload = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": parse_mode
+            }
+            markup = reply_markup if reply_markup is not None else _MAIN_MENU_KB
+            if markup:
+                payload["reply_markup"] = markup
+
             resp = await client.post(
                 f"{TG_API_URL}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": parse_mode
-                },
+                json=payload,
                 timeout=10.0
             )
             if resp.status_code == 200:
@@ -550,15 +594,83 @@ async def handle_telegram_message(message: dict):
     if text.startswith("/start"):
         start_msg = (
             f"👋 *স্বাগতম! আমি আপনার লিঙ্কফাই হোয়াটসঅ্যাপ রোবট (Linkify Bot)।*\n\n"
-            f"আপনার টেলিগ্রাম বট থেকে সরাসরি হোয়াটসঅ্যাপ লগইন এবং নম্বর চেক করতে পারবেন।\n\n"
-            f"📌 *কমান্ডসমূহ (Commands):*\n"
-            f"▫️ \`/login <ফোন নম্বর>\` - নতুন কোনো হোয়াটসঅ্যাপ অ্যাকাউন্ট লিঙ্ক করার জন্য কোড জেনারেট করুন। (যেমন: \`/login 8801700000000\`)\n"
+            f"আপনার টেলিগ্রাম বট থেকে সরাসরি হোয়াটসঅ্যাপ লগইন এবং নম্বর চেক করতে পারবেন। নিচের মেনু বাটনগুলো ব্যবহার করুন:\n\n"
+            f"🔘 *CONNECT WS CHECKER* - হোয়াটসঅ্যাপ লিঙ্ক করার পেয়ারিং কোড নিন\n"
+            f"🔘 *CHECK WS NUMBER* - হোয়াটসঅ্যাপ নম্বর চেক নির্দেশিকা\n"
+            f"🔘 *BUY PACKAGE* - প্রিমিয়াম প্যাকেজ ও ক্রেডিট\n"
+            f"🔘 *HELP* - সহায়তা এবং সকল কমান্ড\n"
+            f"🔘 *ADMIN PANEL* - সিস্টেম অ্যাডমিন কন্ট্রোল প্যানেল\n\n"
+            f"📌 *সরাসরি কমান্ডসমূহ (Commands):*\n"
+            f"▫️ \`/login <ফোন নম্বর>\` - হোয়াটসঅ্যাপ লিঙ্ক করার জন্য কোড পান। (যেমন: \`/login 8801700000000\`)\n"
             f"▫️ \`/check <ফোন নম্বর>\` - কোনো একটি নাম্বারের হোয়াটসঅ্যাপ আইডি আছে কিনা চেক করুন। (যেমন: \`/check 8801712345678\`)\n"
             f"▫️ \`/status\` - লিঙ্ককৃত হোয়াটসঅ্যাপ এ্যাকাউন্ট এবং কানেকশন স্ট্যাটাস দেখার জন্য।\n"
             f"▫️ \`/logout <ফোন নম্বর>\` - কোনো অ্যাকাউন্ট মুছে ফেলার জন্য। (যেমন: \`/logout 8801700000000\`)\n\n"
             f"💡 *বাল্ক হোয়াটসঅ্যাপ চেক:* যেকোনো সাধারণ মেসেজে এক বা একাধিক মোবাইল নম্বর একসাথে পাঠালে অথবা কোনো টেক্সট/সিএসভি ফাইল আপলোড করলে আমি অটো চেক করে একটি চমৎকার রিপোর্ট পাঠিয়ে দেবো!"
         )
-        await send_telegram_message(chat_id, start_msg)
+        await send_telegram_message(chat_id, start_msg, "Markdown", _MAIN_MENU_KB)
+        return
+
+    # --- MENU BUILDER BUTTON ACTIONS ---
+    if text == "CONNECT WS CHECKER" or "CONNECT WS CHECKER" in text:
+        connect_msg = (
+            f"🔗 *CONNECT WS CHECKER*\n\n"
+            f"আপনার হোয়াটসঅ্যাপ অ্যাকাউন্ট বটের সাথে কানেক্ট করতে নিচের নিয়মে কমান্ড দিন:\n"
+            f"👉 \`/login <ফোন নম্বর>\`\n\n"
+            f"*উদাহরণ:*\n"
+            f"\`/login 8801700000000\`\n\n"
+            f"ℹ️ কমান্ড পাঠালে আপনি একটি ৮-ডিজিটের পেয়ারিং কোড পাবেন যা দিয়ে মোবাইলের WhatsApp অ্যাপ থেকে *Linked Devices* এ গিয়ে লিঙ্ক করতে পারবেন।"
+        )
+        await send_telegram_message(chat_id, connect_msg, "Markdown", _MAIN_MENU_KB)
+        return
+
+    if text == "CHECK WS NUMBER" or "CHECK WS NUMBER" in text:
+        check_guide_msg = (
+            f"🔍 *CHECK WS NUMBER*\n\n"
+            f"হোয়াটসঅ্যাপ নম্বর চেক করার বিভিন্ন সহজ উপায়:\n\n"
+            f"১️⃣ *সিঙ্গেল নম্বর:* কমান্ড দিন \`/check <ফোন নম্বর>\` (যেমন: \`/check 8801712345678\`)\n"
+            f"২️⃣ *দ্রুত চেক:* এক বা একাধিক নম্বর সরাসরি মেসেজে লিখে পাঠিয়ে দিন\n"
+            f"৩️⃣ *বাল্ক ফাইল চেক:* নম্বরগুলোর একটি \`.txt\` বা \`.csv\` ফাইল এখানে আপলোড দিন\n\n"
+            f"বট সাথে সাথে ফিল্টার করে সক্রিয় ও নিষ্ক্রিয় তালিকা জানিয়ে দেবে! ⚡"
+        )
+        await send_telegram_message(chat_id, check_guide_msg, "Markdown", _MAIN_MENU_KB)
+        return
+
+    if text == "BUY PACKAGE" or "BUY PACKAGE" in text:
+        buy_pkg_msg = (
+            f"💎 *BUY PACKAGE*\n\n"
+            f"আমাদের প্রিমিয়াম প্যাকেজ ও ক্রেডিট প্ল্যান শীঘ্রই যুক্ত হচ্ছে।\n"
+            f"বিস্তারিত তথ্য ও কাস্টম প্ল্যানের জন্য অ্যাডমিনের সাথে যোগাযোগ রাখুন।"
+        )
+        await send_telegram_message(chat_id, buy_pkg_msg, "Markdown", _MAIN_MENU_KB)
+        return
+
+    if text == "HELP" or "HELP" in text:
+        help_msg = (
+            f"📖 *HELP & GUIDELINES*\n\n"
+            f"*কিভাবে ব্যবহার করবেন:*\n"
+            f"▫️ \`CONNECT WS CHECKER\` - হোয়াটসঅ্যাপ অ্যাকাউন্ট যুক্ত করার নিয়মাবলী\n"
+            f"▫️ \`CHECK WS NUMBER\` - নম্বর ফিল্টার ও ভেরিফিকেশন করার গাইড\n"
+            f"▫️ \`/login <ফোন নম্বর>\` - পেয়ারিং কোড দিয়ে হোয়াটসঅ্যাপ লিঙ্ক করুন\n"
+            f"▫️ \`/check <ফোন নম্বর>\` - নম্বর চেক করুন\n"
+            f"▫️ \`/status\` - লিঙ্ককৃত অ্যাকাউন্টের বর্তমান অবস্থা দেখুন\n"
+            f"▫️ \`/logout <ফোন নম্বর>\` - অ্যাকাউন্ট মুছে ফেলুন\n"
+            f"▫️ ফাইল সেন্ড করুন - আনলিমিটেড বাল্ক নম্বর একসাথে চেক করার জন্য"
+        )
+        await send_telegram_message(chat_id, help_msg, "Markdown", _MAIN_MENU_KB)
+        return
+
+    if text == "ADMIN PANEL" or "ADMIN PANEL" in text:
+        accounts = get_saved_accounts_list()
+        admin_msg = (
+            f"⚙️ *ADMIN PANEL*\n\n"
+            f"স্বাগতম অ্যাডমিন প্যানেলে।\n\n"
+            f"📊 *বর্তমান সিস্টেম অবস্থা:*\n"
+            f"▫️ একটিভ গেটওয়ে: {f'🟢 +{current_active_wa_phone}' if current_active_wa_phone else '🔴 কোনো সক্রিয় অ্যাকাউন্ট নেই'}\n"
+            f"▫️ মোট সংরক্ষিত অ্যাকাউন্ট: {len(accounts)} টি\n"
+            f"▫️ টেলিগ্রাম বট: 🟢 অনলাইন (@LinkViral_Xbot)\n\n"
+            f"বিস্তারিত অ্যাডমিন কনফিগারেশন শীঘ্রই যোগ করা হচ্ছে।"
+        )
+        await send_telegram_message(chat_id, admin_msg, "Markdown", _MAIN_MENU_KB)
         return
 
     if text.startswith("/login"):
