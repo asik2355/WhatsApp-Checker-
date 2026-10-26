@@ -1,13 +1,14 @@
 [
   {
     "chatId": 8343010638,
-    "username": "@Admin",
-    "name": "System Administrator",
+    "username": "@Destroyer_420",
+    "name": "𝗘𝗧𝗘𝗥𝗡𝗜𝗧𝗬",
     "firstSeen": "2026-10-25T04:57:57.491Z",
-    "lastActive": "2026-10-25T04:57:57.491Z",
+    "lastActive": "2026-10-25T10:06:16.094Z",
     "isPremium": true,
     "package": "Enterprise API",
     "grantedAt": "2026-10-25T04:57:57.491Z",
-    "checksCount": 0
+    "checksCount": 0,
+    "menuMode": null
   }
 ]
